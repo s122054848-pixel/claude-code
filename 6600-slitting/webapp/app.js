@@ -54,6 +54,8 @@ const els = {
   timeLimit1: document.getElementById("timeLimit1"),
   timeLimit2: document.getElementById("timeLimit2"),
   runBtn: document.getElementById("runBtn"),
+  statusBanner: document.getElementById("statusBanner"),
+  statusSpinner: document.getElementById("statusSpinner"),
   statusLine: document.getElementById("statusLine"),
   warningsPanel: document.getElementById("warningsPanel"),
   warningsList: document.getElementById("warningsList"),
@@ -68,8 +70,20 @@ const els = {
 };
 
 els.ordersText.value = SAMPLE_CSV;
+
+function debounce(fn, wait) {
+  let t = null;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
+}
+
+const autoRun = debounce(() => runPipeline(), 600);
+
 els.loadSampleBtn.addEventListener("click", () => {
   els.ordersText.value = SAMPLE_CSV;
+  runPipeline();
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -78,10 +92,18 @@ els.fileInput.addEventListener("change", async () => {
   const buf = await file.arrayBuffer();
   const decoder = new TextDecoder(els.encodingSelect.value);
   els.ordersText.value = decoder.decode(buf);
+  runPipeline();
 });
 
-function setStatus(msg) {
+els.ordersText.addEventListener("input", autoRun);
+for (const id of ["motherWidth", "minPieces", "timeLimit1", "timeLimit2"]) {
+  els[id].addEventListener("change", autoRun);
+}
+
+function setStatus(msg, state) {
   els.statusLine.textContent = msg;
+  els.statusBanner.className = "status-banner state-" + (state || "idle");
+  els.statusSpinner.hidden = state !== "busy";
 }
 
 // ---- parsing ----
@@ -324,7 +346,7 @@ async function runPipeline() {
   try {
     const { widths, demand } = parseOrders(els.ordersText.value);
     if (widths.length === 0) {
-      setStatus("找不到有效的訂單資料，請確認格式為「寬度,數量」。");
+      setStatus("找不到有效的訂單資料，請確認格式為「寬度,數量」。", "idle");
       return;
     }
 
@@ -334,17 +356,18 @@ async function runPipeline() {
     const t2 = Math.max(1, Number(els.timeLimit2.value) || 15);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
-      setStatus("母卷寬度必須是正整數。");
+      setStatus("母卷寬度必須是正整數。", "error");
       return;
     }
 
-    setStatus("產生所有可行刀路組合中...");
+    setStatus("產生所有可行刀路組合中...", "busy");
     await yieldToUI();
     const patterns = generatePatterns(widths, motherWidth, minPieces);
 
     if (patterns.length === 0) {
       setStatus(
-        `在母卷寬度 ${motherWidth}mm、每卷至少 ${minPieces} 刀的限制下，找不到任何「零修邊損耗」的組合，請調整參數。`
+        `在母卷寬度 ${motherWidth}mm、每卷至少 ${minPieces} 刀的限制下，找不到任何「零修邊損耗」的組合，請調整參數。`,
+        "error"
       );
       return;
     }
@@ -366,20 +389,21 @@ async function runPipeline() {
       }
     }
 
-    setStatus(`共產生 ${patterns.length} 種可行刀路，求解最大排產量中（最多 ${t1} 秒）...`);
+    setStatus(`共產生 ${patterns.length} 種可行刀路，求解最大排產量中（最多 ${t1} 秒）...`, "busy");
     await yieldToUI();
     const lp1 = buildLP(patterns, patternCounts, widths, demand, { mode: "max_fulfill" });
     const sol1 = await solveLP(lp1, t1);
 
     if (!sol1 || !sol1.Columns || !Number.isFinite(sol1.ObjectiveValue)) {
-      setStatus("Stage1 求解失敗，請調整時間上限或參數後再試一次。");
+      setStatus("Stage1 求解失敗，請調整時間上限或參數後再試一次。", "error");
       return;
     }
 
     const fulfillFloor = Math.round(sol1.ObjectiveValue);
 
     setStatus(
-      `最大可排產量為 ${fulfillFloor} 件（狀態：${sol1.Status}）。求解最少母卷數中（最多 ${t2} 秒）...`
+      `最大可排產量為 ${fulfillFloor} 件（狀態：${sol1.Status}）。求解最少母卷數中（最多 ${t2} 秒）...`,
+      "busy"
     );
     await yieldToUI();
     const lp2 = buildLP(patterns, patternCounts, widths, demand, {
@@ -389,7 +413,7 @@ async function runPipeline() {
     const sol2 = await solveLP(lp2, t2);
 
     if (!sol2 || !sol2.Columns) {
-      setStatus("Stage2 求解失敗，請調整時間上限或參數後再試一次。");
+      setStatus("Stage2 求解失敗，請調整時間上限或參數後再試一次。", "error");
       return;
     }
 
@@ -413,7 +437,7 @@ async function runPipeline() {
       solutionRows.push({ items, count });
     }
 
-    setStatus(`排出 ${solutionRows.length} 種刀路，計算刀具移動距離最小的生產順序中...`);
+    setStatus(`排出 ${solutionRows.length} 種刀路，計算刀具移動距離最小的生產順序中...`, "busy");
     await yieldToUI();
     const { order, totalCost } = sequencePatterns(solutionRows);
     const sequencedRows = order.map((i, seqIdx) => {
@@ -440,7 +464,8 @@ async function runPipeline() {
     renderFulfillTable(widths, demand, produced);
 
     setStatus(
-      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm。`
+      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm。`,
+      totalDemand - totalProduced > 0 ? "warn" : "ok"
     );
 
     window.__lastPlan = sequencedRows;
@@ -451,7 +476,7 @@ async function runPipeline() {
     }));
   } catch (err) {
     console.error(err);
-    setStatus("發生錯誤：" + (err && err.message ? err.message : String(err)));
+    setStatus("發生錯誤：" + (err && err.message ? err.message : String(err)), "error");
   } finally {
     els.runBtn.disabled = false;
   }
@@ -472,8 +497,8 @@ function renderSummary({
   const cards = [
     { label: "總訂量 (件)", value: totalDemand },
     { label: "已排產 (件)", value: totalProduced },
-    { label: "滿足率", value: pct + "%" },
-    { label: "缺口 (件)", value: shortfall },
+    { label: "滿足率", value: pct + "%", tone: totalDemand > 0 && totalProduced === totalDemand ? "good" : "" },
+    { label: "缺口 (件)", value: shortfall, tone: shortfall > 0 ? "warn" : "good" },
     { label: "使用母卷數", value: totalRolls },
     { label: "刀路種類數", value: patternTypes },
     { label: "刀具總移動距離 (mm)", value: totalKnifeMovement },
@@ -482,7 +507,7 @@ function renderSummary({
   els.summaryCards.innerHTML = "";
   for (const c of cards) {
     const div = document.createElement("div");
-    div.className = "card";
+    div.className = "card" + (c.tone ? " " + c.tone : "");
     div.innerHTML = `<div class="value">${c.value}</div><div class="label">${c.label}</div>`;
     els.summaryCards.appendChild(div);
   }
@@ -507,9 +532,9 @@ function renderFulfillTable(widths, demand, produced) {
     const p = produced[key] || 0;
     const diff = d - p;
     const tr = document.createElement("tr");
-    tr.className = diff > 0 ? "short" : "ok";
+    const badgeClass = diff > 0 ? "short" : "ok";
     const statusText = diff > 0 ? "缺口" : "已滿足";
-    tr.innerHTML = `<td>${w}</td><td>${d}</td><td>${p}</td><td>${diff}</td><td class="status-cell">${statusText}</td>`;
+    tr.innerHTML = `<td>${w}</td><td>${d}</td><td>${p}</td><td>${diff}</td><td><span class="badge ${badgeClass}">${statusText}</span></td>`;
     els.fulfillTable.appendChild(tr);
   }
 }
@@ -547,3 +572,7 @@ els.downloadFulfillBtn.addEventListener("click", () => {
 });
 
 els.runBtn.addEventListener("click", runPipeline);
+
+// auto-run once on load with the pre-filled sample data, so results are
+// visible immediately without needing to press a button
+runPipeline();

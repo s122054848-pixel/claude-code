@@ -7,20 +7,27 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="app">
-  <header>
-    <h1>母卷排刀規劃工具</h1>
-    <p class="subtitle">依「零修邊損耗、每母卷刀數下限、不可超量」三項限制，自動排出裁切方案（完全在瀏覽器端運算，資料不會上傳到任何伺服器）。</p>
-  </header>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark">排刀</span>
+      <div>
+        <h1>母卷排刀規劃工具</h1>
+        <p class="subtitle">零修邊損耗・每卷刀數下限・不可超量・刀具移動最小化 — 匯入資料後自動計算，全程在瀏覽器端運算</p>
+      </div>
+    </div>
+  </div>
+</header>
 
-  <section class="panel">
-    <h2>1. 訂單資料</h2>
-    <div class="row">
-      <label>
+<div class="layout">
+  <aside class="sidebar">
+    <section class="panel">
+      <h2><span class="step">1</span>訂單資料</h2>
+      <label class="field">
         上傳 CSV 檔案
         <input type="file" id="fileInput" accept=".csv,text/csv">
       </label>
-      <label>
+      <label class="field">
         檔案編碼
         <select id="encodingSelect">
           <option value="utf-8" selected>UTF-8</option>
@@ -28,74 +35,82 @@
           <option value="gb18030">GB18030 / GBK（簡體中文）</option>
         </select>
       </label>
-      <button id="loadSampleBtn" type="button">載入範例資料</button>
-    </div>
-    <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>。第一行若非數字會自動視為標題略過。</p>
-    <textarea id="ordersText" rows="12" spellcheck="false"></textarea>
-  </section>
+      <button id="loadSampleBtn" type="button" class="ghost full">載入範例資料</button>
+      <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>。上傳或修改後會自動重新計算。</p>
+      <textarea id="ordersText" rows="10" spellcheck="false"></textarea>
+    </section>
 
-  <section class="panel">
-    <h2>2. 排刀參數</h2>
-    <div class="row">
-      <label>
-        母卷寬度 (mm)
-        <input type="number" id="motherWidth" value="6600" min="1" step="1">
-      </label>
-      <label>
-        每母卷最少刀數
-        <input type="number" id="minPieces" value="3" min="1" step="1">
-      </label>
-      <label>
-        Stage1 求解時間上限 (秒)
-        <input type="number" id="timeLimit1" value="15" min="1" step="1">
-      </label>
-      <label>
-        Stage2 求解時間上限 (秒)
-        <input type="number" id="timeLimit2" value="15" min="1" step="1">
-      </label>
-    </div>
-    <div class="row">
-      <button id="runBtn" type="button" class="primary">開始計算</button>
-      <span id="statusLine" class="status"></span>
-    </div>
-  </section>
+    <section class="panel">
+      <h2><span class="step">2</span>排刀參數</h2>
+      <div class="field-grid">
+        <label class="field">
+          母卷寬度 (mm)
+          <input type="number" id="motherWidth" value="6600" min="1" step="1">
+        </label>
+        <label class="field">
+          每卷最少刀數
+          <input type="number" id="minPieces" value="3" min="1" step="1">
+        </label>
+        <label class="field">
+          Stage1 時限 (秒)
+          <input type="number" id="timeLimit1" value="15" min="1" step="1">
+        </label>
+        <label class="field">
+          Stage2 時限 (秒)
+          <input type="number" id="timeLimit2" value="15" min="1" step="1">
+        </label>
+      </div>
+      <button id="runBtn" type="button" class="primary full">重新計算</button>
+    </section>
 
-  <section class="panel" id="warningsPanel" hidden>
-    <h2>提醒</h2>
-    <ul id="warningsList"></ul>
-  </section>
-
-  <section class="panel" id="summaryPanel" hidden>
-    <h2>3. 結果摘要</h2>
-    <div class="cards" id="summaryCards"></div>
-  </section>
-
-  <section class="panel" id="planPanel" hidden>
-    <h2>4. 裁切計畫（依刀具移動距離最小排序的生產順序）</h2>
-    <p class="hint">同一刀路的母卷會連續生產（同一次刀具設定内），「移動距離」為切換到下一個刀路時，刀具需要重新定位的估計總距離（1 維最佳配對估算）。</p>
-    <button id="downloadPlanBtn" type="button">下載裁切計畫 CSV</button>
-    <div class="table-wrap">
-      <table id="planTable">
-        <thead>
-          <tr><th>生產順序</th><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th><th>與前一刀路移動距離 (mm)</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <div id="statusBanner" class="status-banner state-idle">
+      <span class="spinner" id="statusSpinner" hidden></span>
+      <span id="statusLine">請上傳或編輯訂單資料，系統會自動計算排刀方案。</span>
     </div>
-  </section>
+  </aside>
 
-  <section class="panel" id="fulfillPanel" hidden>
-    <h2>5. 各規格滿足狀況</h2>
-    <button id="downloadFulfillBtn" type="button">下載滿足狀況 CSV</button>
-    <div class="table-wrap">
-      <table id="fulfillTable">
-        <thead>
-          <tr><th>規格 (mm)</th><th>訂量</th><th>已排產</th><th>差額</th><th>狀態</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
+  <main class="content">
+    <section class="panel" id="warningsPanel" hidden>
+      <h2>提醒</h2>
+      <ul id="warningsList"></ul>
+    </section>
+
+    <section class="panel" id="summaryPanel" hidden>
+      <h2>結果摘要</h2>
+      <div class="cards" id="summaryCards"></div>
+    </section>
+
+    <section class="panel" id="planPanel" hidden>
+      <div class="panel-head">
+        <h2>裁切計畫（刀具移動最小化的生產順序）</h2>
+        <button id="downloadPlanBtn" type="button" class="ghost">下載 CSV</button>
+      </div>
+      <p class="hint">同一刀路的母卷會連續生產（同一次刀具設定內）。「移動距離」為切換到下一刀路時，刀具需重新定位的估計總距離（1 維最佳配對估算）。</p>
+      <div class="table-wrap">
+        <table id="planTable">
+          <thead>
+            <tr><th>順序</th><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th><th>移動距離 (mm)</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="fulfillPanel" hidden>
+      <div class="panel-head">
+        <h2>各規格滿足狀況</h2>
+        <button id="downloadFulfillBtn" type="button" class="ghost">下載 CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table id="fulfillTable">
+          <thead>
+            <tr><th>規格 (mm)</th><th>訂量</th><th>已排產</th><th>差額</th><th>狀態</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
 </div>
 
 <script src="vendor/highs.js"></script>
