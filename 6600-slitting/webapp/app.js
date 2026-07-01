@@ -188,6 +188,103 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
   return lines.join("\n");
 }
 
+// ---- stage 3: sequence patterns to minimize total knife movement ----
+// Knife positions of a pattern are its cumulative cut points, excluding the
+// final roll edge, e.g. widths [2100,2100,2400] -> cut points [2100, 4200].
+// Moving from pattern A to pattern B, the cheapest way to realign the knives
+// is the 1-D optimal assignment: sort both position lists (padding the
+// shorter one with 0s, representing knives parked at the start), then sum
+// |a_i - b_i| pairwise - this pairing is provably optimal for 1-D assignment.
+function knifePositions(items) {
+  const sorted = items.slice().sort((a, b) => a - b);
+  const positions = [];
+  let cum = 0;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    cum += sorted[i];
+    positions.push(cum);
+  }
+  return positions;
+}
+
+function transitionCost(posA, posB) {
+  const n = Math.max(posA.length, posB.length);
+  const a = posA.slice().sort((x, y) => x - y);
+  const b = posB.slice().sort((x, y) => x - y);
+  while (a.length < n) a.push(0);
+  while (b.length < n) b.push(0);
+  a.sort((x, y) => x - y);
+  b.sort((x, y) => x - y);
+  let total = 0;
+  for (let i = 0; i < n; i++) total += Math.abs(a[i] - b[i]);
+  return total;
+}
+
+// Nearest-neighbor construction (tried from every start) + 2-opt improvement.
+// Good enough for the tens-of-patterns scale seen here; not an exact TSP solve.
+function sequencePatterns(entries) {
+  const n = entries.length;
+  if (n <= 1) return { order: entries.map((_, i) => i), totalCost: 0 };
+
+  const positions = entries.map((e) => knifePositions(e.items));
+  const dist = [];
+  for (let i = 0; i < n; i++) {
+    dist.push([]);
+    for (let j = 0; j < n; j++) dist[i].push(transitionCost(positions[i], positions[j]));
+  }
+
+  function pathCost(order) {
+    let c = 0;
+    for (let i = 0; i < order.length - 1; i++) c += dist[order[i]][order[i + 1]];
+    return c;
+  }
+
+  let bestOrder = null;
+  let bestCost = Infinity;
+  for (let start = 0; start < n; start++) {
+    const visited = new Array(n).fill(false);
+    const order = [start];
+    visited[start] = true;
+    let cur = start;
+    for (let step = 0; step < n - 1; step++) {
+      let next = -1;
+      let best = Infinity;
+      for (let j = 0; j < n; j++) {
+        if (!visited[j] && dist[cur][j] < best) {
+          best = dist[cur][j];
+          next = j;
+        }
+      }
+      order.push(next);
+      visited[next] = true;
+      cur = next;
+    }
+    const cost = pathCost(order);
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestOrder = order;
+    }
+  }
+
+  let order = bestOrder;
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 1; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const newOrder = order.slice(0, i).concat(order.slice(i, j + 1).reverse(), order.slice(j + 1));
+        const newCost = pathCost(newOrder);
+        if (newCost < bestCost - 1e-9) {
+          order = newOrder;
+          bestCost = newCost;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return { order, totalCost: bestCost, dist };
+}
+
 // ---- HiGHS wasm loading ----
 let highsInstancePromise = null;
 function base64ToUint8Array(base64) {
@@ -316,7 +413,15 @@ async function runPipeline() {
       solutionRows.push({ items, count });
     }
 
-    solutionRows.sort((a, b) => b.count - a.count);
+    setStatus(`排出 ${solutionRows.length} 種刀路，計算刀具移動距離最小的生產順序中...`);
+    await yieldToUI();
+    const { order, totalCost } = sequencePatterns(solutionRows);
+    const sequencedRows = order.map((i, seqIdx) => {
+      const row = solutionRows[i];
+      const prev = seqIdx === 0 ? null : solutionRows[order[seqIdx - 1]];
+      const move = prev ? transitionCost(knifePositions(prev.items), knifePositions(row.items)) : 0;
+      return { ...row, seq: seqIdx + 1, move };
+    });
 
     const totalDemand = widths.reduce((s, w) => s + (demand[String(w)] || 0), 0);
     const totalProduced = widths.reduce((s, w) => s + (produced[String(w)] || 0), 0);
@@ -326,18 +431,19 @@ async function runPipeline() {
       totalProduced,
       shortfall: totalDemand - totalProduced,
       totalRolls,
-      patternTypes: solutionRows.length,
+      patternTypes: sequencedRows.length,
+      totalKnifeMovement: totalCost,
       stage1Status: sol1.Status,
       stage2Status: sol2.Status,
     });
-    renderPlanTable(solutionRows);
+    renderPlanTable(sequencedRows);
     renderFulfillTable(widths, demand, produced);
 
     setStatus(
-      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${solutionRows.length} 種刀路。`
+      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm。`
     );
 
-    window.__lastPlan = solutionRows;
+    window.__lastPlan = sequencedRows;
     window.__lastFulfill = widths.map((w) => ({
       width: w,
       demand: demand[String(w)] || 0,
@@ -351,7 +457,16 @@ async function runPipeline() {
   }
 }
 
-function renderSummary({ totalDemand, totalProduced, shortfall, totalRolls, patternTypes, stage1Status, stage2Status }) {
+function renderSummary({
+  totalDemand,
+  totalProduced,
+  shortfall,
+  totalRolls,
+  patternTypes,
+  totalKnifeMovement,
+  stage1Status,
+  stage2Status,
+}) {
   els.summaryPanel.hidden = false;
   const pct = totalDemand > 0 ? ((totalProduced / totalDemand) * 100).toFixed(1) : "0.0";
   const cards = [
@@ -361,6 +476,7 @@ function renderSummary({ totalDemand, totalProduced, shortfall, totalRolls, patt
     { label: "缺口 (件)", value: shortfall },
     { label: "使用母卷數", value: totalRolls },
     { label: "刀路種類數", value: patternTypes },
+    { label: "刀具總移動距離 (mm)", value: totalKnifeMovement },
     { label: "求解狀態", value: `${stage1Status} / ${stage2Status}` },
   ];
   els.summaryCards.innerHTML = "";
@@ -377,7 +493,7 @@ function renderPlanTable(rows) {
   els.planTable.innerHTML = "";
   for (const row of rows) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${row.items.reduce((s, w) => s + w, 0)}</td>`;
+    tr.innerHTML = `<td>${row.seq}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${row.items.reduce((s, w) => s + w, 0)}</td><td>${row.move}</td>`;
     els.planTable.appendChild(tr);
   }
 }
@@ -414,9 +530,9 @@ function downloadCSV(filename, rows) {
 
 els.downloadPlanBtn.addEventListener("click", () => {
   if (!window.__lastPlan) return;
-  const rows = [["母卷數量", "裁切規格(mm)", "刀數", "合計寬度(mm)"]];
+  const rows = [["生產順序", "母卷數量", "裁切規格(mm)", "刀數", "合計寬度(mm)", "與前一刀路刀具移動距離(mm)"]];
   for (const row of window.__lastPlan) {
-    rows.push([row.count, row.items.join(" + "), row.items.length, row.items.reduce((s, w) => s + w, 0)]);
+    rows.push([row.seq, row.count, row.items.join(" + "), row.items.length, row.items.reduce((s, w) => s + w, 0), row.move]);
   }
   downloadCSV("cutting_plan.csv", rows);
 });

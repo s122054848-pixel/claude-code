@@ -101,22 +101,96 @@ for i, xi in enumerate(x2):
 
 solution.sort(key=lambda t: -t[1])
 
+# --- stage 3: sequence the distinct patterns to minimize total knife movement ---
+# Knife positions of a pattern are the cumulative cut points (excluding the final
+# roll edge), e.g. widths [2100,2100,2400] -> cut points [2100, 4200].
+# Moving from pattern A to pattern B, the cheapest way to realign the knives is
+# the 1-D optimal assignment: sort both position lists (pad the shorter one with
+# 0s, representing knives parked at the start), then sum |a_i - b_i| pairwise
+# (this pairing is provably optimal for 1-D assignment costs).
+
+def knife_positions(items):
+    items = sorted(items)
+    cum = 0
+    positions = []
+    for w in items[:-1]:
+        cum += w
+        positions.append(cum)
+    return positions
+
+def transition_cost(pos_a, pos_b):
+    n = max(len(pos_a), len(pos_b))
+    a = sorted(pos_a) + [0] * (n - len(pos_a))
+    b = sorted(pos_b) + [0] * (n - len(pos_b))
+    a.sort()
+    b.sort()
+    return sum(abs(x - y) for x, y in zip(a, b))
+
+def sequence_patterns(entries):
+    n = len(entries)
+    positions = [knife_positions(sorted(p.elements())) for p, _ in entries]
+    dist = [[transition_cost(positions[i], positions[j]) for j in range(n)] for i in range(n)]
+
+    def path_cost(order):
+        return sum(dist[order[i]][order[i + 1]] for i in range(len(order) - 1))
+
+    best_order, best_cost = None, None
+    for start in range(n):
+        visited = [False] * n
+        order = [start]
+        visited[start] = True
+        cur = start
+        for _ in range(n - 1):
+            nxt = min((j for j in range(n) if not visited[j]), key=lambda j: dist[cur][j])
+            order.append(nxt)
+            visited[nxt] = True
+            cur = nxt
+        cost = path_cost(order)
+        if best_cost is None or cost < best_cost:
+            best_order, best_cost = order, cost
+
+    order = best_order
+    improved = True
+    while improved:
+        improved = False
+        for i in range(1, n - 1):
+            for j in range(i + 1, n):
+                new_order = order[:i] + order[i:j + 1][::-1] + order[j + 1:]
+                new_cost = path_cost(new_order)
+                if new_cost < best_cost - 1e-9:
+                    order, best_cost = new_order, new_cost
+                    improved = True
+
+    return order, best_cost, dist
+
+seq_order, total_knife_distance, dist_matrix = sequence_patterns(solution)
+sequenced = [solution[i] for i in seq_order]
+
 with open(os.path.join(BASE_DIR, 'cutting_plan_6600.csv'), 'w', encoding='utf-8-sig', newline='') as f:
     w_csv = csv.writer(f)
-    w_csv.writerow(['母卷數量', '裁切規格(mm)', '刀數', '合計寬度(mm)'])
-    for p, c in solution:
+    w_csv.writerow(['生產順序', '母卷數量', '裁切規格(mm)', '刀數', '合計寬度(mm)', '與前一刀路刀具移動距離(mm)'])
+    prev_idx = None
+    for seq_no, (idx, (p, c)) in enumerate(zip(seq_order, sequenced), start=1):
         items = sorted(p.elements())
-        w_csv.writerow([c, ' + '.join(str(x) for x in items), len(items), sum(items)])
+        move = 0 if prev_idx is None else dist_matrix[prev_idx][idx]
+        w_csv.writerow([seq_no, c, ' + '.join(str(x) for x in items), len(items), sum(items), move])
+        prev_idx = idx
 
-print("\n=== Cutting plan ===")
+print(f"\n=== Stage3: knife-movement-minimizing production sequence ===")
+print(f"Total knife movement distance across {len(sequenced)} pattern changeovers: {total_knife_distance} mm")
+
+print("\n=== Cutting plan (production sequence) ===")
 total_rolls_used = 0
 produced = Counter()
-for p, c in solution:
+prev_idx = None
+for idx, (p, c) in zip(seq_order, sequenced):
     items = sorted(p.elements())
     total_rolls_used += c
     for w, cnt in p.items():
         produced[w] += cnt * c
-    print(f"Rolls: {c:4d}  Pattern: {' + '.join(str(x) for x in items)} = {sum(items)}")
+    move = 0 if prev_idx is None else dist_matrix[prev_idx][idx]
+    print(f"Rolls: {c:4d}  Move: {move:5d}mm  Pattern: {' + '.join(str(x) for x in items)} = {sum(items)}")
+    prev_idx = idx
 
 print(f"\nTotal mother rolls used: {total_rolls_used}")
 print("\n=== Fulfillment check ===")

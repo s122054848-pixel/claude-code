@@ -71,12 +71,13 @@
   </section>
 
   <section class="panel" id="planPanel" hidden>
-    <h2>4. 裁切計畫（刀路清單）</h2>
+    <h2>4. 裁切計畫（依刀具移動距離最小排序的生產順序）</h2>
+    <p class="hint">同一刀路的母卷會連續生產（同一次刀具設定内），「移動距離」為切換到下一個刀路時，刀具需要重新定位的估計總距離（1 維最佳配對估算）。</p>
     <button id="downloadPlanBtn" type="button">下載裁切計畫 CSV</button>
     <div class="table-wrap">
       <table id="planTable">
         <thead>
-          <tr><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th></tr>
+          <tr><th>生產順序</th><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th><th>與前一刀路移動距離 (mm)</th></tr>
         </thead>
         <tbody></tbody>
       </table>
