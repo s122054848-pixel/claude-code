@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>母卷排刀規劃工具</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>母卷排刀規劃工具</h1>
+    <p class="subtitle">依「零修邊損耗、每母卷刀數下限、不可超量」三項限制，自動排出裁切方案（完全在瀏覽器端運算，資料不會上傳到任何伺服器）。</p>
+  </header>
+
+  <section class="panel">
+    <h2>1. 訂單資料</h2>
+    <div class="row">
+      <label>
+        上傳 CSV 檔案
+        <input type="file" id="fileInput" accept=".csv,text/csv">
+      </label>
+      <label>
+        檔案編碼
+        <select id="encodingSelect">
+          <option value="utf-8" selected>UTF-8</option>
+          <option value="big5">Big5（繁體中文 Excel 常見編碼）</option>
+          <option value="gb18030">GB18030 / GBK（簡體中文）</option>
+        </select>
+      </label>
+      <button id="loadSampleBtn" type="button">載入範例資料</button>
+    </div>
+    <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>。第一行若非數字會自動視為標題略過。</p>
+    <textarea id="ordersText" rows="12" spellcheck="false"></textarea>
+  </section>
+
+  <section class="panel">
+    <h2>2. 排刀參數</h2>
+    <div class="row">
+      <label>
+        母卷寬度 (mm)
+        <input type="number" id="motherWidth" value="6600" min="1" step="1">
+      </label>
+      <label>
+        每母卷最少刀數
+        <input type="number" id="minPieces" value="3" min="1" step="1">
+      </label>
+      <label>
+        Stage1 求解時間上限 (秒)
+        <input type="number" id="timeLimit1" value="15" min="1" step="1">
+      </label>
+      <label>
+        Stage2 求解時間上限 (秒)
+        <input type="number" id="timeLimit2" value="15" min="1" step="1">
+      </label>
+    </div>
+    <div class="row">
+      <button id="runBtn" type="button" class="primary">開始計算</button>
+      <span id="statusLine" class="status"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="warningsPanel" hidden>
+    <h2>提醒</h2>
+    <ul id="warningsList"></ul>
+  </section>
+
+  <section class="panel" id="summaryPanel" hidden>
+    <h2>3. 結果摘要</h2>
+    <div class="cards" id="summaryCards"></div>
+  </section>
+
+  <section class="panel" id="planPanel" hidden>
+    <h2>4. 裁切計畫（刀路清單）</h2>
+    <button id="downloadPlanBtn" type="button">下載裁切計畫 CSV</button>
+    <div class="table-wrap">
+      <table id="planTable">
+        <thead>
+          <tr><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="fulfillPanel" hidden>
+    <h2>5. 各規格滿足狀況</h2>
+    <button id="downloadFulfillBtn" type="button">下載滿足狀況 CSV</button>
+    <div class="table-wrap">
+      <table id="fulfillTable">
+        <thead>
+          <tr><th>規格 (mm)</th><th>訂量</th><th>已排產</th><th>差額</th><th>狀態</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script src="vendor/highs.js"></script>
+<script src="vendor/highs-wasm-base64.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
