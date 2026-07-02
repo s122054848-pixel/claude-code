@@ -653,8 +653,8 @@ async function runPipeline() {
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const minPieces = Math.max(1, Math.round(Number(els.minPieces.value)));
-    const t1 = Math.max(1, Number(els.timeLimit1.value) || 60);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 60);
+    const t1 = Math.max(1, Number(els.timeLimit1.value) || 70);
+    const t2 = Math.max(1, Number(els.timeLimit2.value) || 70);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       setStatus("母卷寬度必須是正整數。", "error");
