@@ -441,6 +441,31 @@ function generateBoundedTubePatterns(widths, maxLen) {
   return patterns;
 }
 
+// Extract a {...entry, count}[] solution from a solved LP's Columns object,
+// keyed against `patternsFull` (array of {items, ...anyMeta}) by index. Also
+// returns totalProduced so callers can sanity-check the result: a MIP that
+// times out with no incumbent can come back with a *present but empty* (or
+// partially empty) Columns object, which is truthy and easy to mistake for
+// a valid zero/low solution if only checked for existence.
+function extractPatternSolution(sol, patternsFull, widths) {
+  const produced = {};
+  for (const w of widths) produced[String(w)] = 0;
+  const rows = [];
+  if (sol && sol.Columns) {
+    for (let i = 0; i < patternsFull.length; i++) {
+      const col = sol.Columns[`x${i}`];
+      if (!col) continue;
+      const count = Math.round(col.Primal || 0);
+      if (count <= 0) continue;
+      const entry = patternsFull[i];
+      for (const w of entry.items) produced[String(w)] = (produced[String(w)] || 0) + count;
+      rows.push({ ...entry, count });
+    }
+  }
+  const totalProduced = Object.values(produced).reduce((a, b) => a + b, 0);
+  return { rows, produced, totalProduced };
+}
+
 // Generic two-stage (max fulfillment, then min tube count) solve over an
 // arbitrary set of {items, stockLength} patterns - reuses buildLP/solveLP
 // since the LP itself only cares about widths, not the actual stock length.
@@ -457,24 +482,18 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
   const lp2 = buildLP(itemsList, counts, widths, demand, { mode: "min_rolls", fulfillFloor });
   const sol2 = await solveLP(lp2, t2);
 
-  const solution = [];
-  const produced = {};
-  for (const w of widths) produced[String(w)] = 0;
-  if (sol2 && sol2.Columns) {
-    for (let i = 0; i < patternsFull.length; i++) {
-      const col = sol2.Columns[`x${i}`];
-      if (!col) continue;
-      const count = Math.round(col.Primal || 0);
-      if (count <= 0) continue;
-      const { items, stockLength } = patternsFull[i];
-      for (const w of items) produced[String(w)] = (produced[String(w)] || 0) + count;
-      solution.push({ items, stockLength, count });
-    }
+  let ext = extractPatternSolution(sol2, patternsFull, widths);
+  if (ext.totalProduced < fulfillFloor - 0.5) {
+    // stage2 failed to find any solution meeting the fulfillment floor
+    // (timed out with no incumbent) - fall back to stage1's own solution,
+    // which is already known to achieve fulfillFloor.
+    ext = extractPatternSolution(sol1, patternsFull, widths);
   }
-  solution.sort((a, b) => b.count - a.count);
+  ext.rows.sort((a, b) => b.count - a.count);
+
   return {
-    solution,
-    produced,
+    solution: ext.rows,
+    produced: ext.produced,
     status1: sol1 ? sol1.Status : "Failed",
     status2: sol2 ? sol2.Status : "Failed",
   };
@@ -634,8 +653,8 @@ async function runPipeline() {
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const minPieces = Math.max(1, Math.round(Number(els.minPieces.value)));
-    const t1 = Math.max(1, Number(els.timeLimit1.value) || 15);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 15);
+    const t1 = Math.max(1, Number(els.timeLimit1.value) || 60);
+    const t2 = Math.max(1, Number(els.timeLimit2.value) || 60);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       setStatus("母卷寬度必須是正整數。", "error");
@@ -703,24 +722,25 @@ async function runPipeline() {
     }
 
     // ---- extract solution ----
-    const solutionRows = [];
-    let totalRolls = 0;
-    const produced = {};
-    for (const w of widths) produced[String(w)] = 0;
-
-    for (let i = 0; i < patterns.length; i++) {
-      const col = sol2.Columns[`x${i}`];
-      if (!col) continue;
-      const count = Math.round(col.Primal || 0);
-      if (count <= 0) continue;
-      totalRolls += count;
-      const items = patterns[i].slice().sort((a, b) => a - b);
-      for (const w of items) {
-        const key = String(w);
-        produced[key] = (produced[key] || 0) + count;
-      }
-      solutionRows.push({ items, count });
+    const patternsFull = patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
+    let ext = extractPatternSolution(sol2, patternsFull, widths);
+    if (ext.totalProduced < fulfillFloor - 0.5) {
+      // stage2 (min rolls) failed to find any solution meeting the
+      // fulfillment floor (e.g. timed out with no incumbent, which HiGHS
+      // can report as a present-but-empty Columns object) - fall back to
+      // stage1's own solution, which is already known to achieve fulfillFloor.
+      ext = extractPatternSolution(sol1, patternsFull, widths);
     }
+    if (fulfillFloor > 0 && ext.totalProduced === 0) {
+      setStatus(
+        "求解器回報了排產量但沒有實際找到可行解（可能是時限內找不到解），請調整時間上限或參數後再試一次。",
+        "error"
+      );
+      return;
+    }
+    const solutionRows = ext.rows;
+    const produced = ext.produced;
+    const totalRolls = solutionRows.reduce((s, r) => s + r.count, 0);
 
     setStatus(`排出 ${solutionRows.length} 種刀路，計算刀具移動距離最小的生產順序中...`, "busy");
     await yieldToUI();

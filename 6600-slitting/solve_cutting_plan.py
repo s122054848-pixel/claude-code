@@ -121,8 +121,16 @@ solver2 = pulp.PULP_CBC_CMD(msg=1, timeLimit=180, warmStart=True)
 prob2.solve(solver2)
 print("Stage2 status:", pulp.LpStatus[prob2.status])
 total_rolls = pulp.value(prob2.objective)
-if total_rolls is None:
-    print("Stage2 found no solution at all; falling back to stage1's own (non-roll-minimized) solution.")
+x2_fulfilled = sum(
+    round(xi.value() or 0) * len(patterns[i])
+    for i, xi in enumerate(x2)
+)
+if total_rolls is None or x2_fulfilled < total_fulfilled - 1e-3:
+    # Either no incumbent at all, or (defensively) one that doesn't actually
+    # meet the fulfillment floor - fall back to stage1's own solution, which
+    # is already known to satisfy every constraint including MIN_ROLLS_PER_PATTERN.
+    print("Stage2 didn't produce a solution meeting the fulfillment floor; "
+          "falling back to stage1's own (non-roll-minimized) solution.")
     x2 = x
     total_rolls = sum(x1_vals)
 print("Min rolls achieving that fulfillment:", total_rolls)
