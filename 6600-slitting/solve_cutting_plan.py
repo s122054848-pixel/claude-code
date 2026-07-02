@@ -5,6 +5,7 @@ import pulp
 
 MOTHER_WIDTH = 6600
 MIN_PIECES = 3
+MIN_ROLLS_PER_PATTERN = 3  # each pattern, if used at all, must be used > 2 times
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -60,9 +61,19 @@ for p in patterns:
 patterns = uniq_patterns
 print(f"unique patterns: {len(patterns)}")
 
+# Tight per-pattern upper bound: a pattern can never be used more times than
+# the scarcest width it consumes allows, ignoring competition from other
+# patterns. Also serves as the big-M for the 0-or->=MIN_ROLLS_PER_PATTERN
+# indicator constraints below.
+pattern_ubound = [
+    min(demand[w] // c for w, c in patterns[i].items())
+    for i in range(len(patterns))
+]
+
 # --- ILP stage 1: maximize total fulfilled quantity (sum of production), production_i <= demand_i
 prob1 = pulp.LpProblem("max_fulfillment", pulp.LpMaximize)
 x = [pulp.LpVariable(f"x_{i}", lowBound=0, cat="Integer") for i in range(len(patterns))]
+y = [pulp.LpVariable(f"y_{i}", cat="Binary") for i in range(len(patterns))]
 
 # production per width
 prod_expr = {w: pulp.lpSum(x[i] * patterns[i].get(w, 0) for i in range(len(patterns))) for w in widths}
@@ -70,26 +81,50 @@ prod_expr = {w: pulp.lpSum(x[i] * patterns[i].get(w, 0) for i in range(len(patte
 for w in widths:
     prob1 += prod_expr[w] <= demand[w]
 
+for i in range(len(patterns)):
+    prob1 += x[i] <= pattern_ubound[i] * y[i]
+    prob1 += x[i] >= MIN_ROLLS_PER_PATTERN * y[i]
+
 prob1 += pulp.lpSum(prod_expr[w] for w in widths)
 
-solver = pulp.PULP_CBC_CMD(msg=1, timeLimit=120)
+solver = pulp.PULP_CBC_CMD(msg=1, timeLimit=180)
 prob1.solve(solver)
 print("Stage1 status:", pulp.LpStatus[prob1.status])
 total_fulfilled = pulp.value(prob1.objective)
 print("Max total fulfilled pieces:", total_fulfilled)
 
+# stage1's own solution is already a feasible point for stage2 (same
+# constraints, and its total production already equals total_fulfilled) -
+# use it as a warm start so CBC doesn't have to rediscover feasibility from
+# scratch under the extra big-M/binary constraints, which otherwise can take
+# a very long time to find any incumbent at all.
+x1_vals = [round(xi.value() or 0) for xi in x]
+
 # --- stage 2: minimize number of rolls while keeping total fulfilled == total_fulfilled (or >=, since it's max)
 prob2 = pulp.LpProblem("min_rolls", pulp.LpMinimize)
 x2 = [pulp.LpVariable(f"x2_{i}", lowBound=0, cat="Integer") for i in range(len(patterns))]
+y2 = [pulp.LpVariable(f"y2_{i}", cat="Binary") for i in range(len(patterns))]
 prod_expr2 = {w: pulp.lpSum(x2[i] * patterns[i].get(w, 0) for i in range(len(patterns))) for w in widths}
 for w in widths:
     prob2 += prod_expr2[w] <= demand[w]
+for i in range(len(patterns)):
+    prob2 += x2[i] <= pattern_ubound[i] * y2[i]
+    prob2 += x2[i] >= MIN_ROLLS_PER_PATTERN * y2[i]
 prob2 += pulp.lpSum(prod_expr2[w] for w in widths) >= total_fulfilled - 1e-3
 prob2 += pulp.lpSum(x2)
 
-prob2.solve(solver)
+for i in range(len(patterns)):
+    x2[i].setInitialValue(x1_vals[i])
+    y2[i].setInitialValue(1 if x1_vals[i] > 0 else 0)
+
+solver2 = pulp.PULP_CBC_CMD(msg=1, timeLimit=180, warmStart=True)
+prob2.solve(solver2)
 print("Stage2 status:", pulp.LpStatus[prob2.status])
 total_rolls = pulp.value(prob2.objective)
+if total_rolls is None:
+    print("Stage2 found no solution at all; falling back to stage1's own (non-roll-minimized) solution.")
+    x2 = x
+    total_rolls = sum(x1_vals)
 print("Min rolls achieving that fulfillment:", total_rolls)
 
 # --- extract solution ---

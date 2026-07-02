@@ -51,6 +51,7 @@ const els = {
   ordersText: document.getElementById("ordersText"),
   motherWidth: document.getElementById("motherWidth"),
   minPieces: document.getElementById("minPieces"),
+  minRollsPerPattern: document.getElementById("minRollsPerPattern"),
   timeLimit1: document.getElementById("timeLimit1"),
   timeLimit2: document.getElementById("timeLimit2"),
   runBtn: document.getElementById("runBtn"),
@@ -114,6 +115,7 @@ els.ordersText.addEventListener("input", autoRun);
 for (const id of [
   "motherWidth",
   "minPieces",
+  "minRollsPerPattern",
   "timeLimit1",
   "timeLimit2",
   "tubeLenA",
@@ -192,16 +194,36 @@ function patternToCounts(pattern) {
 }
 
 // ---- LP (CPLEX LP format) construction ----
+// opts.minBatch: if set (>1), each pattern must be used 0 times or at least
+// minBatch times (modeled with a binary indicator y_i per pattern and a
+// tight big-M = the pattern's own per-width demand ceiling). Patterns that
+// could never reach minBatch even alone are dropped entirely.
 function buildLP(patterns, patternCounts, widths, demand, opts) {
   const nPat = patterns.length;
+  const minBatch = opts.minBatch || 0;
   const lines = [];
+
+  const activeIdx = [];
+  const upperBound = new Array(nPat);
+  for (let i = 0; i < nPat; i++) {
+    if (minBatch > 1) {
+      let U = Infinity;
+      const counts = patternCounts[i];
+      for (const key in counts) {
+        U = Math.min(U, Math.floor((demand[key] || 0) / counts[key]));
+      }
+      upperBound[i] = U;
+      if (U < minBatch) continue;
+    }
+    activeIdx.push(i);
+  }
 
   if (opts.mode === "max_fulfill") {
     lines.push("Maximize");
-    lines.push(" obj: " + patterns.map((p, i) => `${p.length} x${i}`).join(" + "));
+    lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `${patterns[i].length} x${i}`).join(" + ") : "0"));
   } else {
     lines.push("Minimize");
-    lines.push(" obj: " + patterns.map((_p, i) => `x${i}`).join(" + "));
+    lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `x${i}`).join(" + ") : "0"));
   }
 
   lines.push("Subject To");
@@ -209,7 +231,7 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
   // per-width incidence: width -> array of "count xIdx"
   const widthTerms = new Map();
   for (const w of widths) widthTerms.set(String(w), []);
-  for (let i = 0; i < nPat; i++) {
+  for (const i of activeIdx) {
     const counts = patternCounts[i];
     for (const key in counts) {
       if (!widthTerms.has(key)) widthTerms.set(key, []);
@@ -220,17 +242,30 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
   for (const w of widths) {
     const key = String(w);
     const terms = widthTerms.get(key) || [];
-    const expr = terms.length ? terms.join(" + ") : `0 x0`;
+    const expr = terms.length ? terms.join(" + ") : activeIdx.length ? `0 x${activeIdx[0]}` : "0 dummy";
     lines.push(` c${key}: ${expr} <= ${demand[key] || 0}`);
   }
 
   if (opts.mode === "min_rolls") {
-    const fulfillTerms = patterns.map((p, i) => `${p.length} x${i}`).join(" + ");
+    const fulfillTerms = activeIdx.length ? activeIdx.map((i) => `${patterns[i].length} x${i}`).join(" + ") : "0 dummy";
     lines.push(` c_fulfill: ${fulfillTerms} >= ${opts.fulfillFloor}`);
   }
 
+  if (minBatch > 1) {
+    for (const i of activeIdx) {
+      lines.push(` cub_${i}: x${i} - ${upperBound[i]} y${i} <= 0`);
+      lines.push(` clb_${i}: x${i} - ${minBatch} y${i} >= 0`);
+    }
+  }
+
   lines.push("General");
-  lines.push(patterns.map((_p, i) => `x${i}`).join(" "));
+  lines.push(activeIdx.map((i) => `x${i}`).join(" "));
+
+  if (minBatch > 1) {
+    lines.push("Binary");
+    lines.push(activeIdx.map((i) => `y${i}`).join(" "));
+  }
+
   lines.push("End");
 
   return lines.join("\n");
@@ -501,7 +536,49 @@ async function runTubePlan(produced, t1, t2) {
   };
 }
 
-// ---- HiGHS wasm loading ----
+// ---- HiGHS wasm solving ----
+// Solving runs in a Web Worker so a slow MIP (e.g. with the min-batch-size
+// constraint) doesn't freeze the page's UI thread. Falls back to a
+// synchronous in-page solve if the Worker can't be created/used.
+let highsWorker = null;
+let workerReqId = 0;
+const workerPending = new Map();
+let workerBroken = false;
+
+function getWorker() {
+  if (!highsWorker) {
+    highsWorker = new Worker("worker.js");
+    highsWorker.onmessage = (e) => {
+      const { id, ok, sol, error } = e.data;
+      const pending = workerPending.get(id);
+      if (!pending) return;
+      workerPending.delete(id);
+      if (ok) pending.resolve(sol);
+      else pending.reject(new Error(error));
+    };
+    highsWorker.onerror = (e) => {
+      for (const pending of workerPending.values()) pending.reject(new Error(e.message || "worker error"));
+      workerPending.clear();
+      workerBroken = true;
+    };
+  }
+  return highsWorker;
+}
+
+function solveInWorker(lpText, options) {
+  return new Promise((resolve, reject) => {
+    const id = ++workerReqId;
+    workerPending.set(id, { resolve, reject });
+    try {
+      getWorker().postMessage({ id, lp: lpText, options });
+    } catch (err) {
+      workerPending.delete(id);
+      reject(err);
+    }
+  });
+}
+
+// fallback path: solve directly on the main thread
 let highsInstancePromise = null;
 function base64ToUint8Array(base64) {
   const binary = atob(base64);
@@ -510,8 +587,7 @@ function base64ToUint8Array(base64) {
   for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
-
-function getHighs() {
+function getHighsInline() {
   if (!highsInstancePromise) {
     const wasmBinary = base64ToUint8Array(window.HIGHS_WASM_BASE64);
     highsInstancePromise = Module({ wasmBinary });
@@ -520,8 +596,17 @@ function getHighs() {
 }
 
 async function solveLP(lpText, timeLimitSec) {
-  const highs = await getHighs();
-  return highs.solve(lpText, { time_limit: timeLimitSec, output_flag: false });
+  const options = { time_limit: timeLimitSec, output_flag: false };
+  if (!workerBroken && typeof Worker !== "undefined") {
+    try {
+      return await solveInWorker(lpText, options);
+    } catch (err) {
+      console.warn("Worker solve failed, falling back to main-thread solve:", err);
+      workerBroken = true;
+    }
+  }
+  const highs = await getHighsInline();
+  return highs.solve(lpText, options);
 }
 
 function yieldToUI() {
@@ -586,9 +671,11 @@ async function runPipeline() {
       }
     }
 
+    const minBatch = Math.max(1, Math.round(Number(els.minRollsPerPattern.value)) || 1);
+
     setStatus(`共產生 ${patterns.length} 種可行刀路，求解最大排產量中（最多 ${t1} 秒）...`, "busy");
     await yieldToUI();
-    const lp1 = buildLP(patterns, patternCounts, widths, demand, { mode: "max_fulfill" });
+    const lp1 = buildLP(patterns, patternCounts, widths, demand, { mode: "max_fulfill", minBatch });
     const sol1 = await solveLP(lp1, t1);
 
     if (!sol1 || !sol1.Columns || !Number.isFinite(sol1.ObjectiveValue)) {
@@ -606,6 +693,7 @@ async function runPipeline() {
     const lp2 = buildLP(patterns, patternCounts, widths, demand, {
       mode: "min_rolls",
       fulfillFloor,
+      minBatch,
     });
     const sol2 = await solveLP(lp2, t2);
 

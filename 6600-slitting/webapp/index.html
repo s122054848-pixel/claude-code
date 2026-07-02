@@ -52,6 +52,10 @@
           <input type="number" id="minPieces" value="3" min="1" step="1">
         </label>
         <label class="field">
+          同刀路最少母卷數
+          <input type="number" id="minRollsPerPattern" value="3" min="1" step="1">
+        </label>
+        <label class="field">
           Stage1 時限 (秒)
           <input type="number" id="timeLimit1" value="15" min="1" step="1">
         </label>
@@ -60,6 +64,7 @@
           <input type="number" id="timeLimit2" value="15" min="1" step="1">
         </label>
       </div>
+      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。</p>
       <button id="runBtn" type="button" class="primary full">重新計算</button>
     </section>
 
