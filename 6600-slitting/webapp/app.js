@@ -67,6 +67,21 @@ const els = {
   fulfillTable: document.getElementById("fulfillTable").querySelector("tbody"),
   downloadPlanBtn: document.getElementById("downloadPlanBtn"),
   downloadFulfillBtn: document.getElementById("downloadFulfillBtn"),
+  tubePlanEnabled: document.getElementById("tubePlanEnabled"),
+  tubeLenA: document.getElementById("tubeLenA"),
+  tubeLenB: document.getElementById("tubeLenB"),
+  tubeWasteTol: document.getElementById("tubeWasteTol"),
+  tubeR2Limit: document.getElementById("tubeR2Limit"),
+  tubeR2Step: document.getElementById("tubeR2Step"),
+  tubeSummaryPanel: document.getElementById("tubeSummaryPanel"),
+  tubeSummaryCards: document.getElementById("tubeSummaryCards"),
+  tubeRound1Panel: document.getElementById("tubeRound1Panel"),
+  tubeRound1Table: document.getElementById("tubeRound1Table").querySelector("tbody"),
+  tubeRound2Panel: document.getElementById("tubeRound2Panel"),
+  tubeRound2Table: document.getElementById("tubeRound2Table").querySelector("tbody"),
+  tubeRound2Title: document.getElementById("tubeRound2Title"),
+  downloadTube1Btn: document.getElementById("downloadTube1Btn"),
+  downloadTube2Btn: document.getElementById("downloadTube2Btn"),
 };
 
 els.ordersText.value = SAMPLE_CSV;
@@ -96,9 +111,20 @@ els.fileInput.addEventListener("change", async () => {
 });
 
 els.ordersText.addEventListener("input", autoRun);
-for (const id of ["motherWidth", "minPieces", "timeLimit1", "timeLimit2"]) {
+for (const id of [
+  "motherWidth",
+  "minPieces",
+  "timeLimit1",
+  "timeLimit2",
+  "tubeLenA",
+  "tubeLenB",
+  "tubeWasteTol",
+  "tubeR2Limit",
+  "tubeR2Step",
+]) {
   els[id].addEventListener("change", autoRun);
 }
+els.tubePlanEnabled.addEventListener("change", autoRun);
 
 function setStatus(msg, state) {
   els.statusLine.textContent = msg;
@@ -307,6 +333,174 @@ function sequencePatterns(entries) {
   return { order, totalCost: bestCost, dist };
 }
 
+// ---- stage 4: paper-tube (紙管) combination plan ----
+// Round 1: only stock lengths in `lengths` (e.g. 4600/4400mm), each tube's
+// combined segments must use more than (1 - wasteTol) of the stock length.
+function generateRound1TubePatterns(widths, lengths, wasteTol) {
+  const n = widths.length;
+  if (n === 0) return [];
+  const maxLen = Math.max(...lengths);
+  const maxPieces = Math.floor(maxLen / widths[0]);
+  const windows = lengths.map((L) => [L, L * (1 - wasteTol), L]);
+  const patterns = [];
+  const seen = new Set();
+  const combo = [];
+
+  function dfs(startIdx, count, total) {
+    if (count >= 1) {
+      for (const [L, lo, hi] of windows) {
+        if (total >= lo && total <= hi) {
+          const items = combo.slice().sort((a, b) => a - b);
+          const key = L + ":" + items.join(",");
+          if (!seen.has(key)) {
+            seen.add(key);
+            patterns.push({ items, stockLength: L });
+          }
+        }
+      }
+    }
+    if (total >= maxLen || count >= maxPieces) return;
+    for (let i = startIdx; i < n; i++) {
+      const w = widths[i];
+      if (total + w > maxLen) break;
+      combo.push(w);
+      dfs(i, count + 1, total + w);
+      combo.pop();
+    }
+  }
+
+  dfs(0, 0, 0);
+  return patterns;
+}
+
+// Round 2: any multiset of widths with sum <= maxLen, no lower bound (waste
+// doesn't matter for this round).
+function generateBoundedTubePatterns(widths, maxLen) {
+  const n = widths.length;
+  if (n === 0) return [];
+  const maxPieces = Math.floor(maxLen / widths[0]);
+  const patterns = [];
+  const seen = new Set();
+  const combo = [];
+
+  function dfs(startIdx, count, total) {
+    if (count >= 1) {
+      const items = combo.slice().sort((a, b) => a - b);
+      const key = items.join(",");
+      if (!seen.has(key)) {
+        seen.add(key);
+        patterns.push({ items, stockLength: maxLen });
+      }
+    }
+    if (total >= maxLen || count >= maxPieces) return;
+    for (let i = startIdx; i < n; i++) {
+      const w = widths[i];
+      if (total + w > maxLen) break;
+      combo.push(w);
+      dfs(i, count + 1, total + w);
+      combo.pop();
+    }
+  }
+
+  dfs(0, 0, 0);
+  return patterns;
+}
+
+// Generic two-stage (max fulfillment, then min tube count) solve over an
+// arbitrary set of {items, stockLength} patterns - reuses buildLP/solveLP
+// since the LP itself only cares about widths, not the actual stock length.
+async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
+  if (patternsFull.length === 0 || widths.length === 0) {
+    return { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
+  }
+  const itemsList = patternsFull.map((p) => p.items);
+  const counts = itemsList.map(patternToCounts);
+  const lp1 = buildLP(itemsList, counts, widths, demand, { mode: "max_fulfill" });
+  const sol1 = await solveLP(lp1, t1);
+  const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
+
+  const lp2 = buildLP(itemsList, counts, widths, demand, { mode: "min_rolls", fulfillFloor });
+  const sol2 = await solveLP(lp2, t2);
+
+  const solution = [];
+  const produced = {};
+  for (const w of widths) produced[String(w)] = 0;
+  if (sol2 && sol2.Columns) {
+    for (let i = 0; i < patternsFull.length; i++) {
+      const col = sol2.Columns[`x${i}`];
+      if (!col) continue;
+      const count = Math.round(col.Primal || 0);
+      if (count <= 0) continue;
+      const { items, stockLength } = patternsFull[i];
+      for (const w of items) produced[String(w)] = (produced[String(w)] || 0) + count;
+      solution.push({ items, stockLength, count });
+    }
+  }
+  solution.sort((a, b) => b.count - a.count);
+  return {
+    solution,
+    produced,
+    status1: sol1 ? sol1.Status : "Failed",
+    status2: sol2 ? sol2.Status : "Failed",
+  };
+}
+
+async function runTubePlan(produced, t1, t2) {
+  const lenA = Math.round(Number(els.tubeLenA.value)) || 4600;
+  const lenB = Math.round(Number(els.tubeLenB.value)) || 4400;
+  const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
+  const r2Limit = Math.round(Number(els.tubeR2Limit.value)) || 4300;
+  const r2Step = Math.max(1, Math.round(Number(els.tubeR2Step.value)) || 200);
+  const round2Length = Math.floor((r2Limit - 1) / r2Step) * r2Step;
+
+  const tubeWidths = Object.keys(produced)
+    .map(Number)
+    .filter((w) => (produced[String(w)] || 0) > 0)
+    .sort((a, b) => a - b);
+  const tubeDemand = {};
+  for (const w of tubeWidths) tubeDemand[String(w)] = produced[String(w)];
+
+  const round1Patterns = generateRound1TubePatterns(tubeWidths, [lenA, lenB], wasteTol);
+  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, t1, t2);
+
+  const remainingWidths = tubeWidths.filter(
+    (w) => tubeDemand[String(w)] - (round1.produced[String(w)] || 0) > 0
+  );
+  const remainingDemand = {};
+  for (const w of remainingWidths) {
+    remainingDemand[String(w)] = tubeDemand[String(w)] - (round1.produced[String(w)] || 0);
+  }
+
+  let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
+  if (remainingWidths.length > 0 && round2Length > 0) {
+    const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Length);
+    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, t1, t2);
+  }
+
+  const totalDemand = tubeWidths.reduce((s, w) => s + tubeDemand[String(w)], 0);
+  const round1Total = Object.values(round1.produced).reduce((a, b) => a + b, 0);
+  const round2Total = Object.values(round2.produced).reduce((a, b) => a + b, 0);
+  const round1Tubes = round1.solution.reduce((s, r) => s + r.count, 0);
+  const round2Tubes = round2.solution.reduce((s, r) => s + r.count, 0);
+
+  return {
+    lenA,
+    lenB,
+    wasteTol,
+    round2Length,
+    tubeWidths,
+    tubeDemand,
+    round1,
+    round2,
+    totalDemand,
+    round1Total,
+    round2Total,
+    round1Tubes,
+    round2Tubes,
+    shortfall: totalDemand - round1Total - round2Total,
+  };
+}
+
 // ---- HiGHS wasm loading ----
 let highsInstancePromise = null;
 function base64ToUint8Array(base64) {
@@ -342,6 +536,9 @@ async function runPipeline() {
   els.summaryPanel.hidden = true;
   els.planPanel.hidden = true;
   els.fulfillPanel.hidden = true;
+  els.tubeSummaryPanel.hidden = true;
+  els.tubeRound1Panel.hidden = true;
+  els.tubeRound2Panel.hidden = true;
 
   try {
     const { widths, demand } = parseOrders(els.ordersText.value);
@@ -463,17 +660,30 @@ async function runPipeline() {
     renderPlanTable(sequencedRows);
     renderFulfillTable(widths, demand, produced);
 
-    setStatus(
-      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm。`,
-      totalDemand - totalProduced > 0 ? "warn" : "ok"
-    );
-
     window.__lastPlan = sequencedRows;
     window.__lastFulfill = widths.map((w) => ({
       width: w,
       demand: demand[String(w)] || 0,
       produced: produced[String(w)] || 0,
     }));
+
+    let tubeSummaryMsg = "";
+    if (els.tubePlanEnabled.checked) {
+      setStatus("排刀計畫完成，計算紙管組合計畫中...", "busy");
+      await yieldToUI();
+      const tube = await runTubePlan(produced, t1, t2);
+      renderTubePlan(tube);
+      window.__lastTube = tube;
+      tubeSummaryMsg = `｜紙管：${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段（Round1 ${tube.round1Tubes} 支、Round2 ${tube.round2Tubes} 支）`;
+      if (tube.shortfall > 0) tubeSummaryMsg += `，缺口 ${tube.shortfall} 段`;
+    } else {
+      window.__lastTube = null;
+    }
+
+    setStatus(
+      `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm${tubeSummaryMsg}。`,
+      totalDemand - totalProduced > 0 || (window.__lastTube && window.__lastTube.shortfall > 0) ? "warn" : "ok"
+    );
   } catch (err) {
     console.error(err);
     setStatus("發生錯誤：" + (err && err.message ? err.message : String(err)), "error");
@@ -539,6 +749,49 @@ function renderFulfillTable(widths, demand, produced) {
   }
 }
 
+function renderTubePlan(tube) {
+  els.tubeSummaryPanel.hidden = false;
+  const pct = tube.totalDemand > 0 ? (((tube.round1Total + tube.round2Total) / tube.totalDemand) * 100).toFixed(1) : "0.0";
+  const cards = [
+    { label: "所需紙管段數", value: tube.totalDemand },
+    { label: "Round1 滿足段數", value: tube.round1Total },
+    { label: "Round2 滿足段數", value: tube.round2Total },
+    { label: "總滿足率", value: pct + "%", tone: tube.shortfall === 0 ? "good" : "" },
+    { label: "缺口段數", value: tube.shortfall, tone: tube.shortfall > 0 ? "warn" : "good" },
+    { label: `Round1 母管數 (${tube.lenA}/${tube.lenB}mm)`, value: tube.round1Tubes },
+    { label: `Round2 母管數 (${tube.round2Length}mm)`, value: tube.round2Tubes },
+  ];
+  els.tubeSummaryCards.innerHTML = "";
+  for (const c of cards) {
+    const div = document.createElement("div");
+    div.className = "card" + (c.tone ? " " + c.tone : "");
+    div.innerHTML = `<div class="value">${c.value}</div><div class="label">${c.label}</div>`;
+    els.tubeSummaryCards.appendChild(div);
+  }
+
+  els.tubeRound1Panel.hidden = tube.round1.solution.length === 0;
+  els.tubeRound1Table.innerHTML = "";
+  for (const row of tube.round1.solution) {
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    const waste = row.stockLength - sum;
+    const rate = ((waste / row.stockLength) * 100).toFixed(2) + "%";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td><td>${rate}</td>`;
+    els.tubeRound1Table.appendChild(tr);
+  }
+
+  els.tubeRound2Panel.hidden = tube.round2.solution.length === 0;
+  els.tubeRound2Title.textContent = `Round2：剩餘規格組合（${tube.round2Length}mm 母管，不限修邊損耗）`;
+  els.tubeRound2Table.innerHTML = "";
+  for (const row of tube.round2.solution) {
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    const waste = row.stockLength - sum;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td>`;
+    els.tubeRound2Table.appendChild(tr);
+  }
+}
+
 function downloadCSV(filename, rows) {
   const bom = "﻿";
   const csv = bom + rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
@@ -569,6 +822,27 @@ els.downloadFulfillBtn.addEventListener("click", () => {
     rows.push([r.width, r.demand, r.produced, r.demand - r.produced]);
   }
   downloadCSV("fulfillment.csv", rows);
+});
+
+els.downloadTube1Btn.addEventListener("click", () => {
+  if (!window.__lastTube) return;
+  const rows = [["母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)", "損耗率"]];
+  for (const row of window.__lastTube.round1.solution) {
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    const waste = row.stockLength - sum;
+    rows.push([row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, waste, ((waste / row.stockLength) * 100).toFixed(2) + "%"]);
+  }
+  downloadCSV("tube_plan_round1.csv", rows);
+});
+
+els.downloadTube2Btn.addEventListener("click", () => {
+  if (!window.__lastTube) return;
+  const rows = [["母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)"]];
+  for (const row of window.__lastTube.round2.solution) {
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    rows.push([row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, row.stockLength - sum]);
+  }
+  downloadCSV("tube_plan_round2.csv", rows);
 });
 
 els.runBtn.addEventListener("click", runPipeline);
