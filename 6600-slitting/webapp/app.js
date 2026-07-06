@@ -69,17 +69,22 @@ const els = {
   downloadPlanBtn: document.getElementById("downloadPlanBtn"),
   downloadFulfillBtn: document.getElementById("downloadFulfillBtn"),
   tubePlanEnabled: document.getElementById("tubePlanEnabled"),
-  tubeLenA: document.getElementById("tubeLenA"),
-  tubeLenB: document.getElementById("tubeLenB"),
+  tubeLen1: document.getElementById("tubeLen1"),
+  tubeLen2: document.getElementById("tubeLen2"),
+  tubeLen3: document.getElementById("tubeLen3"),
+  tubeLen4: document.getElementById("tubeLen4"),
   tubeWasteTol: document.getElementById("tubeWasteTol"),
-  tubeR2Limit: document.getElementById("tubeR2Limit"),
-  tubeR2Step: document.getElementById("tubeR2Step"),
+  tubeR2Len1: document.getElementById("tubeR2Len1"),
+  tubeR2Len2: document.getElementById("tubeR2Len2"),
+  tubeR2Len3: document.getElementById("tubeR2Len3"),
+  tubeR2Len4: document.getElementById("tubeR2Len4"),
   tubeSummaryPanel: document.getElementById("tubeSummaryPanel"),
   tubeSummaryCards: document.getElementById("tubeSummaryCards"),
   tubeRound1Panel: document.getElementById("tubeRound1Panel"),
   tubeRound1Table: document.getElementById("tubeRound1Table").querySelector("tbody"),
   tubeRound2Panel: document.getElementById("tubeRound2Panel"),
   tubeRound2Table: document.getElementById("tubeRound2Table").querySelector("tbody"),
+  tubeRound1Title: document.getElementById("tubeRound1Title"),
   tubeRound2Title: document.getElementById("tubeRound2Title"),
   downloadTube1Btn: document.getElementById("downloadTube1Btn"),
   downloadTube2Btn: document.getElementById("downloadTube2Btn"),
@@ -118,11 +123,15 @@ for (const id of [
   "minRollsPerPattern",
   "timeLimit1",
   "timeLimit2",
-  "tubeLenA",
-  "tubeLenB",
+  "tubeLen1",
+  "tubeLen2",
+  "tubeLen3",
+  "tubeLen4",
   "tubeWasteTol",
-  "tubeR2Limit",
-  "tubeR2Step",
+  "tubeR2Len1",
+  "tubeR2Len2",
+  "tubeR2Len3",
+  "tubeR2Len4",
 ]) {
   els[id].addEventListener("change", autoRun);
 }
@@ -408,11 +417,14 @@ function generateRound1TubePatterns(widths, lengths, wasteTol) {
   return patterns;
 }
 
-// Round 2: any multiset of widths with sum <= maxLen, no lower bound (waste
-// doesn't matter for this round).
-function generateBoundedTubePatterns(widths, maxLen) {
+// Round 2: any multiset of widths with sum <= one of `lengths`, no lower
+// bound (waste doesn't matter for this round). A combo that fits multiple
+// lengths gets one pattern entry per satisfying length, since each is a
+// distinct physical tube choice for the solver to pick from.
+function generateBoundedTubePatterns(widths, lengths) {
   const n = widths.length;
-  if (n === 0) return [];
+  if (n === 0 || lengths.length === 0) return [];
+  const maxLen = Math.max(...lengths);
   const maxPieces = Math.floor(maxLen / widths[0]);
   const patterns = [];
   const seen = new Set();
@@ -420,11 +432,14 @@ function generateBoundedTubePatterns(widths, maxLen) {
 
   function dfs(startIdx, count, total) {
     if (count >= 1) {
-      const items = combo.slice().sort((a, b) => a - b);
-      const key = items.join(",");
-      if (!seen.has(key)) {
-        seen.add(key);
-        patterns.push({ items, stockLength: maxLen });
+      for (const L of lengths) {
+        if (total > L) continue;
+        const items = combo.slice().sort((a, b) => a - b);
+        const key = L + ":" + items.join(",");
+        if (!seen.has(key)) {
+          seen.add(key);
+          patterns.push({ items, stockLength: L });
+        }
       }
     }
     if (total >= maxLen || count >= maxPieces) return;
@@ -499,13 +514,16 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
   };
 }
 
+function readLengthList(ids) {
+  return ids
+    .map((id) => Math.round(Number(els[id].value)))
+    .filter((v) => Number.isFinite(v) && v > 0);
+}
+
 async function runTubePlan(produced, t1, t2) {
-  const lenA = Math.round(Number(els.tubeLenA.value)) || 4600;
-  const lenB = Math.round(Number(els.tubeLenB.value)) || 4400;
+  const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
+  const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
-  const r2Limit = Math.round(Number(els.tubeR2Limit.value)) || 4300;
-  const r2Step = Math.max(1, Math.round(Number(els.tubeR2Step.value)) || 200);
-  const round2Length = Math.floor((r2Limit - 1) / r2Step) * r2Step;
 
   const tubeWidths = Object.keys(produced)
     .map(Number)
@@ -514,7 +532,7 @@ async function runTubePlan(produced, t1, t2) {
   const tubeDemand = {};
   for (const w of tubeWidths) tubeDemand[String(w)] = produced[String(w)];
 
-  const round1Patterns = generateRound1TubePatterns(tubeWidths, [lenA, lenB], wasteTol);
+  const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
   const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, t1, t2);
 
   const remainingWidths = tubeWidths.filter(
@@ -526,8 +544,8 @@ async function runTubePlan(produced, t1, t2) {
   }
 
   let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
-  if (remainingWidths.length > 0 && round2Length > 0) {
-    const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Length);
+  if (remainingWidths.length > 0 && round2Lengths.length > 0) {
+    const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Lengths);
     round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, t1, t2);
   }
 
@@ -538,10 +556,9 @@ async function runTubePlan(produced, t1, t2) {
   const round2Tubes = round2.solution.reduce((s, r) => s + r.count, 0);
 
   return {
-    lenA,
-    lenB,
+    round1Lengths,
+    round2Lengths,
     wasteTol,
-    round2Length,
     tubeWidths,
     tubeDemand,
     round1,
@@ -866,8 +883,8 @@ function renderTubePlan(tube) {
     { label: "Round2 滿足段數", value: tube.round2Total },
     { label: "總滿足率", value: pct + "%", tone: tube.shortfall === 0 ? "good" : "" },
     { label: "缺口段數", value: tube.shortfall, tone: tube.shortfall > 0 ? "warn" : "good" },
-    { label: `Round1 母管數 (${tube.lenA}/${tube.lenB}mm)`, value: tube.round1Tubes },
-    { label: `Round2 母管數 (${tube.round2Length}mm)`, value: tube.round2Tubes },
+    { label: `Round1 母管數 (${tube.round1Lengths.join("/")}mm)`, value: tube.round1Tubes },
+    { label: `Round2 母管數 (${tube.round2Lengths.join("/")}mm)`, value: tube.round2Tubes },
   ];
   els.tubeSummaryCards.innerHTML = "";
   for (const c of cards) {
@@ -878,6 +895,7 @@ function renderTubePlan(tube) {
   }
 
   els.tubeRound1Panel.hidden = tube.round1.solution.length === 0;
+  els.tubeRound1Title.textContent = `Round1：${tube.round1Lengths.join("/")}mm 母管（修邊損耗 < ${(tube.wasteTol * 100).toFixed(1)}%）`;
   els.tubeRound1Table.innerHTML = "";
   for (const row of tube.round1.solution) {
     const sum = row.items.reduce((s, w) => s + w, 0);
@@ -889,7 +907,7 @@ function renderTubePlan(tube) {
   }
 
   els.tubeRound2Panel.hidden = tube.round2.solution.length === 0;
-  els.tubeRound2Title.textContent = `Round2：剩餘規格組合（${tube.round2Length}mm 母管，不限修邊損耗）`;
+  els.tubeRound2Title.textContent = `Round2：剩餘規格組合（${tube.round2Lengths.join("/")}mm 母管，不限修邊損耗）`;
   els.tubeRound2Table.innerHTML = "";
   for (const row of tube.round2.solution) {
     const sum = row.items.reduce((s, w) => s + w, 0);

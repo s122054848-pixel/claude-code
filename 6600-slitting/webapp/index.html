@@ -74,29 +74,48 @@
         <input type="checkbox" id="tubePlanEnabled" checked>
         依裁切計畫產出的母卷數量，規劃紙管（母管）裁切組合
       </label>
+      <p class="hint">Round1：最多可指定 4 個母管長度，修邊損耗須低於上限。留空的欄位不使用。</p>
       <div class="field-grid">
         <label class="field">
-          Round1 母管長度 A (mm)
-          <input type="number" id="tubeLenA" value="4600" min="1" step="1">
+          Round1 長度 1 (mm)
+          <input type="number" id="tubeLen1" value="4600" min="1" step="1">
         </label>
         <label class="field">
-          Round1 母管長度 B (mm)
-          <input type="number" id="tubeLenB" value="4400" min="1" step="1">
+          Round1 長度 2 (mm)
+          <input type="number" id="tubeLen2" value="4400" min="1" step="1">
+        </label>
+        <label class="field">
+          Round1 長度 3 (mm)
+          <input type="number" id="tubeLen3" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round1 長度 4 (mm)
+          <input type="number" id="tubeLen4" step="1" placeholder="不使用">
         </label>
         <label class="field">
           Round1 最大修邊損耗率 (%)
           <input type="number" id="tubeWasteTol" value="2" min="0" step="0.1">
         </label>
+      </div>
+      <p class="hint">Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
+      <div class="field-grid">
         <label class="field">
-          Round2 門幅上限 (mm，不含)
-          <input type="number" id="tubeR2Limit" value="4300" min="1" step="1">
+          Round2 長度 1 (mm)
+          <input type="number" id="tubeR2Len1" value="4200" min="1" step="1">
         </label>
         <label class="field">
-          Round2 長度須為倍數 (mm)
-          <input type="number" id="tubeR2Step" value="200" min="1" step="1">
+          Round2 長度 2 (mm)
+          <input type="number" id="tubeR2Len2" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round2 長度 3 (mm)
+          <input type="number" id="tubeR2Len3" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round2 長度 4 (mm)
+          <input type="number" id="tubeR2Len4" step="1" placeholder="不使用">
         </label>
       </div>
-      <p class="hint">Round1 只用 A、B 兩種母管長度，修邊損耗須低於上限。Round1 排不進的規格，Round2 改用「小於門幅上限、且為倍數」中最大的一個長度（不限修邊損耗）繼續組合。</p>
     </section>
 
     <div id="statusBanner" class="status-banner state-idle">
@@ -154,7 +173,7 @@
 
     <section class="panel" id="tubeRound1Panel" hidden>
       <div class="panel-head">
-        <h2>Round1：4600 / 4400mm 母管（修邊損耗 &lt; 2%）</h2>
+        <h2 id="tubeRound1Title">Round1：母管組合</h2>
         <button id="downloadTube1Btn" type="button" class="ghost">下載 CSV</button>
       </div>
       <div class="table-wrap">
