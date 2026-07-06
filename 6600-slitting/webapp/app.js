@@ -137,8 +137,35 @@ for (const id of [
 }
 els.tubePlanEnabled.addEventListener("change", autoRun);
 
+// A single solve can legitimately take over a minute (harder MIPs with the
+// min-batch-size constraint don't converge quickly), during which only one
+// or two status lines would otherwise change - which can look identical to
+// a frozen/broken page. Show a live elapsed-time counter while busy so it's
+// visibly still working.
+let elapsedTimer = null;
+let pipelineStartTime = null;
+let lastBusyMsg = "";
+
 function setStatus(msg, state) {
-  els.statusLine.textContent = msg;
+  if (state === "busy") {
+    lastBusyMsg = msg;
+    if (!pipelineStartTime) pipelineStartTime = Date.now();
+    if (!elapsedTimer) {
+      elapsedTimer = setInterval(() => {
+        const s = Math.round((Date.now() - pipelineStartTime) / 1000);
+        els.statusLine.textContent = `${lastBusyMsg}（已運算 ${s} 秒）`;
+      }, 1000);
+    }
+    const s = Math.round((Date.now() - pipelineStartTime) / 1000);
+    els.statusLine.textContent = `${msg}（已運算 ${s} 秒）`;
+  } else {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+    pipelineStartTime = null;
+    els.statusLine.textContent = msg;
+  }
   els.statusBanner.className = "status-banner state-" + (state || "idle");
   els.statusSpinner.hidden = state !== "busy";
 }
@@ -520,7 +547,17 @@ function readLengthList(ids) {
     .filter((v) => Number.isFinite(v) && v > 0);
 }
 
+// The tube-plan patterns are far fewer/simpler than the main slitting
+// problem and consistently solve in a few seconds, so give them their own
+// small fixed time budget instead of reusing the (possibly much larger)
+// main Stage1/Stage2 limits - otherwise a single run can end up doing the
+// main solve plus up to two more two-stage solves (round1, round2) each at
+// the full main time limit, and the worst case compounds into minutes.
+const TUBE_STAGE_TIME_LIMIT = 20;
+
 async function runTubePlan(produced, t1, t2) {
+  const tubeT1 = Math.min(t1, TUBE_STAGE_TIME_LIMIT);
+  const tubeT2 = Math.min(t2, TUBE_STAGE_TIME_LIMIT);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
@@ -533,7 +570,7 @@ async function runTubePlan(produced, t1, t2) {
   for (const w of tubeWidths) tubeDemand[String(w)] = produced[String(w)];
 
   const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
-  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, t1, t2);
+  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2);
 
   const remainingWidths = tubeWidths.filter(
     (w) => tubeDemand[String(w)] - (round1.produced[String(w)] || 0) > 0
@@ -546,7 +583,7 @@ async function runTubePlan(produced, t1, t2) {
   let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
   if (remainingWidths.length > 0 && round2Lengths.length > 0) {
     const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Lengths);
-    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, t1, t2);
+    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeT1, tubeT2);
   }
 
   const totalDemand = tubeWidths.reduce((s, w) => s + tubeDemand[String(w)], 0);
