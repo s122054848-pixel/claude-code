@@ -386,24 +386,46 @@ function sequencePatterns(entries) {
     }
   }
 
-  let order = bestOrder;
+  // 2-opt: evaluate each candidate swap via its O(1) cost delta (only the
+  // two edges at the ends of the reversed segment change) and reverse
+  // in-place only when it actually improves, instead of rebuilding the
+  // whole array and recomputing the full path cost per candidate. This
+  // turns each pass from O(n^3) into O(n^2), and the overall convergence
+  // from O(n^4) into O(n^3) - which matters once there are 50-100+ patterns.
+  const order = bestOrder.slice();
+  let totalCost = bestCost;
   let improved = true;
   while (improved) {
     improved = false;
     for (let i = 1; i < n - 1; i++) {
+      const a = order[i - 1];
+      let b = order[i];
+      let dab = dist[a][b];
       for (let j = i + 1; j < n; j++) {
-        const newOrder = order.slice(0, i).concat(order.slice(i, j + 1).reverse(), order.slice(j + 1));
-        const newCost = pathCost(newOrder);
-        if (newCost < bestCost - 1e-9) {
-          order = newOrder;
-          bestCost = newCost;
+        const c = order[j];
+        const d = j + 1 < n ? order[j + 1] : null;
+        const oldEdges = dab + (d !== null ? dist[c][d] : 0);
+        const newEdges = dist[a][c] + (d !== null ? dist[b][d] : 0);
+        if (newEdges < oldEdges - 1e-9) {
+          let lo = i;
+          let hi = j;
+          while (lo < hi) {
+            const tmp = order[lo];
+            order[lo] = order[hi];
+            order[hi] = tmp;
+            lo++;
+            hi--;
+          }
+          totalCost += newEdges - oldEdges;
           improved = true;
+          b = order[i];
+          dab = dist[a][b];
         }
       }
     }
   }
 
-  return { order, totalCost: bestCost, dist };
+  return { order, totalCost, dist };
 }
 
 // ---- stage 4: paper-tube (紙管) combination plan ----

@@ -192,19 +192,34 @@ def sequence_patterns(entries):
         if best_cost is None or cost < best_cost:
             best_order, best_cost = order, cost
 
-    order = best_order
+    # 2-opt: evaluate each candidate swap via its O(1) cost delta (only the
+    # two edges at the ends of the reversed segment change) and reverse
+    # in-place only when it actually improves, instead of rebuilding the
+    # whole list and recomputing the full path cost per candidate. This
+    # turns each pass from O(n^3) into O(n^2), and the overall convergence
+    # from O(n^4) into O(n^3) - which matters once there are 50-100+ patterns.
+    order = best_order[:]
+    total_cost = best_cost
     improved = True
     while improved:
         improved = False
         for i in range(1, n - 1):
+            a = order[i - 1]
+            b = order[i]
+            dab = dist[a][b]
             for j in range(i + 1, n):
-                new_order = order[:i] + order[i:j + 1][::-1] + order[j + 1:]
-                new_cost = path_cost(new_order)
-                if new_cost < best_cost - 1e-9:
-                    order, best_cost = new_order, new_cost
+                c = order[j]
+                d = order[j + 1] if j + 1 < n else None
+                old_edges = dab + (dist[c][d] if d is not None else 0)
+                new_edges = dist[a][c] + (dist[b][d] if d is not None else 0)
+                if new_edges < old_edges - 1e-9:
+                    order[i:j + 1] = order[i:j + 1][::-1]
+                    total_cost += new_edges - old_edges
                     improved = True
+                    b = order[i]
+                    dab = dist[a][b]
 
-    return order, best_cost, dist
+    return order, total_cost, dist
 
 seq_order, total_knife_distance, dist_matrix = sequence_patterns(solution)
 sequenced = [solution[i] for i in seq_order]
