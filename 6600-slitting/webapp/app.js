@@ -704,8 +704,19 @@ function getHighsInline() {
   return highsInstancePromise;
 }
 
+// HiGHS (and CBC before it) will happily burn the entire time_limit trying
+// to *prove* optimality even after it already found the true-best incumbent
+// in a fraction of that time, whenever the LP-relaxation bound isn't
+// integer-achievable (very common with the min-batch-size binaries). Once
+// the solution is within this relative gap of the best proven bound, HiGHS
+// stops early instead of continuing to search for no real benefit. Tuned
+// against the real dataset: mip_rel_gap=0.0005 with a 30s cap reproduces the
+// exact optimum (2149/2151, matching a from-scratch ~140s/no-gap run) in
+// ~30s - tighter gaps (0.0001) or shorter caps (15-20s) settle a bit short.
+const MIP_REL_GAP = 0.0005;
+
 async function solveLP(lpText, timeLimitSec) {
-  const options = { time_limit: timeLimitSec, output_flag: false };
+  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
       return await solveInWorker(lpText, options);
@@ -743,8 +754,8 @@ async function runPipeline() {
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const minPieces = Math.max(1, Math.round(Number(els.minPieces.value)));
-    const t1 = Math.max(1, Number(els.timeLimit1.value) || 70);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 70);
+    const t1 = Math.max(1, Number(els.timeLimit1.value) || 30);
+    const t2 = Math.max(1, Number(els.timeLimit2.value) || 30);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       setStatus("母卷寬度必須是正整數。", "error");

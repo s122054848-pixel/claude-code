@@ -7,6 +7,15 @@ MOTHER_WIDTH = 6600
 MIN_PIECES = 3
 MIN_ROLLS_PER_PATTERN = 3  # each pattern, if used at all, must be used > 2 times
 
+# With the min-batch-size binary indicators, CBC finds the true optimum in
+# ~0.3-10s but then spends the rest of a long time limit trying to *prove*
+# optimality against an LP-relaxation bound that isn't integer-achievable -
+# that gap never fully closes, so without a gapRel it just burns the whole
+# time limit for no benefit. Accepting solutions within 0.1% of the best
+# known bound gets the identical answer (verified: 2149 fulfilled/653 rolls,
+# matching the old 180s-per-stage run exactly) in ~11s total instead of 140s+.
+MIP_GAP_REL = 0.001
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- load demand ---
@@ -87,7 +96,7 @@ for i in range(len(patterns)):
 
 prob1 += pulp.lpSum(prod_expr[w] for w in widths)
 
-solver = pulp.PULP_CBC_CMD(msg=1, timeLimit=180)
+solver = pulp.PULP_CBC_CMD(msg=1, timeLimit=180, gapRel=MIP_GAP_REL)
 prob1.solve(solver)
 print("Stage1 status:", pulp.LpStatus[prob1.status])
 total_fulfilled = pulp.value(prob1.objective)
@@ -117,7 +126,7 @@ for i in range(len(patterns)):
     x2[i].setInitialValue(x1_vals[i])
     y2[i].setInitialValue(1 if x1_vals[i] > 0 else 0)
 
-solver2 = pulp.PULP_CBC_CMD(msg=1, timeLimit=180, warmStart=True)
+solver2 = pulp.PULP_CBC_CMD(msg=1, timeLimit=180, gapRel=MIP_GAP_REL, warmStart=True)
 prob2.solve(solver2)
 print("Stage2 status:", pulp.LpStatus[prob2.status])
 total_rolls = pulp.value(prob2.objective)
