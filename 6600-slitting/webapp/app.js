@@ -624,7 +624,17 @@ let workerBroken = false;
 
 function getWorker() {
   if (!highsWorker) {
-    highsWorker = new Worker("worker.js");
+    // Constructing a Worker from a plain relative/file path (e.g. "worker.js")
+    // throws a SecurityError on file:// pages ("cannot be accessed from
+    // origin 'null'"), which silently falls back to the main-thread solve
+    // and freezes the tab for the whole computation (Chrome then shows its
+    // own "page unresponsive" watchdog dialog). A blob: URL is always
+    // same-origin to its creator, including from file://, so build the
+    // worker from an inlined bundle (vendor/worker-bundle.js, loaded as a
+    // normal <script> tag) instead of fetching a separate worker script.
+    const blob = new Blob([window.WORKER_BUNDLE_SOURCE], { type: "application/javascript" });
+    const blobUrl = URL.createObjectURL(blob);
+    highsWorker = new Worker(blobUrl);
     highsWorker.onmessage = (e) => {
       const { id, ok, sol, error } = e.data;
       const pending = workerPending.get(id);
