@@ -74,6 +74,7 @@ const els = {
   tubeLen3: document.getElementById("tubeLen3"),
   tubeLen4: document.getElementById("tubeLen4"),
   tubeWasteTol: document.getElementById("tubeWasteTol"),
+  tubeStageTimeLimit: document.getElementById("tubeStageTimeLimit"),
   tubeR2Len1: document.getElementById("tubeR2Len1"),
   tubeR2Len2: document.getElementById("tubeR2Len2"),
   tubeR2Len3: document.getElementById("tubeR2Len3"),
@@ -128,6 +129,7 @@ for (const id of [
   "tubeLen3",
   "tubeLen4",
   "tubeWasteTol",
+  "tubeStageTimeLimit",
   "tubeR2Len1",
   "tubeR2Len2",
   "tubeR2Len3",
@@ -553,11 +555,13 @@ function readLengthList(ids) {
 // main Stage1/Stage2 limits - otherwise a single run can end up doing the
 // main solve plus up to two more two-stage solves (round1, round2) each at
 // the full main time limit, and the worst case compounds into minutes.
-const TUBE_STAGE_TIME_LIMIT = 20;
-
+// Round1 and Round2 each run 2 stages (max-fulfill, then min-tubes), so at
+// this per-stage cap the absolute worst case for round1+round2 combined is
+// 4 * cap; default 12s keeps that at 48s, comfortably under a 50s budget.
 async function runTubePlan(produced, t1, t2) {
-  const tubeT1 = Math.min(t1, TUBE_STAGE_TIME_LIMIT);
-  const tubeT2 = Math.min(t2, TUBE_STAGE_TIME_LIMIT);
+  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 12);
+  const tubeT1 = Math.min(t1, tubeStageCap);
+  const tubeT2 = Math.min(t2, tubeStageCap);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;

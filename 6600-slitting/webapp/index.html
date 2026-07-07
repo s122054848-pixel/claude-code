@@ -96,8 +96,12 @@
           Round1 最大修邊損耗率 (%)
           <input type="number" id="tubeWasteTol" value="2" min="0" step="0.1">
         </label>
+        <label class="field">
+          紙管求解時限 (每階段,秒)
+          <input type="number" id="tubeStageTimeLimit" value="12" min="1" step="1">
+        </label>
       </div>
-      <p class="hint">Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
+      <p class="hint">Round1、Round2 各分兩階段求解，預設 12 秒／階段可讓 Round1+Round2 最壞情況總時間落在 50 秒內。Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
       <div class="field-grid">
         <label class="field">
           Round2 長度 1 (mm)
