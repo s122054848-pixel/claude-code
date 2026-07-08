@@ -164,7 +164,7 @@ function parseOrders(text) {
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
-    const parts = line.split(",").map((s) => s.trim()).filter((s) => s.length);
+    const parts = line.split(/[,，\s]+/).map((s) => s.trim()).filter((s) => s.length);
     if (parts.length < 2) continue;
     const w = Number(parts[0]);
     const q = Number(parts[1]);
