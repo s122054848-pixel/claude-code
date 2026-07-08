@@ -1085,7 +1085,3 @@ els.downloadTube2Btn.addEventListener("click", () => {
 els.runSlitBtn.addEventListener("click", () => runPipeline("slit"));
 els.runFullBtn.addEventListener("click", () => runPipeline("full"));
 els.runTubeBtn.addEventListener("click", () => runPipeline("tube"));
-
-// auto-run the full pipeline once on load with the pre-filled sample data,
-// so results are visible immediately without needing to press a button
-runPipeline("full");
