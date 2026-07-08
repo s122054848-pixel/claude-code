@@ -428,6 +428,22 @@ function sequencePatterns(entries) {
   return { order, totalCost, dist };
 }
 
+// Sequence a solved tube round's pattern list into the movement-minimizing
+// production order, attaching seq (order number) and move (distance from
+// the previous pattern) to each row. Reuses the same knifePositions /
+// transitionCost / sequencePatterns as the slitting stage3 above.
+function sequenceTubeRows(solutionRows) {
+  if (solutionRows.length === 0) return { rows: [], totalCost: 0 };
+  const { order, totalCost } = sequencePatterns(solutionRows);
+  const rows = order.map((i, seqIdx) => {
+    const row = solutionRows[i];
+    const prev = seqIdx === 0 ? null : solutionRows[order[seqIdx - 1]];
+    const move = prev ? transitionCost(knifePositions(prev.items), knifePositions(row.items)) : 0;
+    return { ...row, seq: seqIdx + 1, move };
+  });
+  return { rows, totalCost };
+}
+
 // ---- stage 4: paper-tube (紙管) combination plan ----
 // Round 1: only stock lengths in `lengths` (e.g. 4600/4400mm), each tube's
 // combined segments must use more than (1 - wasteTol) of the stock length.
@@ -618,6 +634,14 @@ async function runTubePlan(produced, t1, t2) {
   const round1Tubes = round1.solution.reduce((s, r) => s + r.count, 0);
   const round2Tubes = round2.solution.reduce((s, r) => s + r.count, 0);
 
+  // Sequence each round's patterns into the blade-movement-minimizing
+  // production order (Round1 and Round2 use different mother-tube stock, so
+  // each is sequenced independently rather than as one combined run). Reuses
+  // sequencePatterns/knifePositions/transitionCost from the slitting stage3
+  // above, since the same 1-D cut-position assignment logic applies.
+  const round1Seq = sequenceTubeRows(round1.solution);
+  const round2Seq = sequenceTubeRows(round2.solution);
+
   return {
     round1Lengths,
     round2Lengths,
@@ -626,6 +650,10 @@ async function runTubePlan(produced, t1, t2) {
     tubeDemand,
     round1,
     round2,
+    round1SequencedRows: round1Seq.rows,
+    round2SequencedRows: round2Seq.rows,
+    round1Movement: round1Seq.totalCost,
+    round2Movement: round2Seq.totalCost,
     totalDemand,
     round1Total,
     round2Total,
@@ -883,7 +911,7 @@ async function runPipeline() {
       const tube = await runTubePlan(produced, t1, t2);
       renderTubePlan(tube);
       window.__lastTube = tube;
-      tubeSummaryMsg = `｜紙管：${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段（Round1 ${tube.round1Tubes} 支、Round2 ${tube.round2Tubes} 支）`;
+      tubeSummaryMsg = `｜紙管：${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段（Round1 ${tube.round1Tubes} 支/移動 ${tube.round1Movement}mm、Round2 ${tube.round2Tubes} 支/移動 ${tube.round2Movement}mm）`;
       if (tube.shortfall > 0) tubeSummaryMsg += `，缺口 ${tube.shortfall} 段`;
     } else {
       window.__lastTube = null;
@@ -969,6 +997,8 @@ function renderTubePlan(tube) {
     { label: "缺口段數", value: tube.shortfall, tone: tube.shortfall > 0 ? "warn" : "good" },
     { label: `Round1 母管數 (${tube.round1Lengths.join("/")}mm)`, value: tube.round1Tubes },
     { label: `Round2 母管數 (${tube.round2Lengths.join("/")}mm)`, value: tube.round2Tubes },
+    { label: "Round1 刀具移動距離 (mm)", value: tube.round1Movement },
+    { label: "Round2 刀具移動距離 (mm)", value: tube.round2Movement },
   ];
   els.tubeSummaryCards.innerHTML = "";
   for (const c of cards) {
@@ -978,26 +1008,26 @@ function renderTubePlan(tube) {
     els.tubeSummaryCards.appendChild(div);
   }
 
-  els.tubeRound1Panel.hidden = tube.round1.solution.length === 0;
-  els.tubeRound1Title.textContent = `Round1：${tube.round1Lengths.join("/")}mm 母管（修邊損耗 < ${(tube.wasteTol * 100).toFixed(1)}%）`;
+  els.tubeRound1Panel.hidden = tube.round1SequencedRows.length === 0;
+  els.tubeRound1Title.textContent = `Round1：${tube.round1Lengths.join("/")}mm 母管（修邊損耗 < ${(tube.wasteTol * 100).toFixed(1)}%，依刀具移動最少排序）`;
   els.tubeRound1Table.innerHTML = "";
-  for (const row of tube.round1.solution) {
+  for (const row of tube.round1SequencedRows) {
     const sum = row.items.reduce((s, w) => s + w, 0);
     const waste = row.stockLength - sum;
     const rate = ((waste / row.stockLength) * 100).toFixed(2) + "%";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td><td>${rate}</td>`;
+    tr.innerHTML = `<td>${row.seq}</td><td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td><td>${rate}</td><td>${row.move}</td>`;
     els.tubeRound1Table.appendChild(tr);
   }
 
-  els.tubeRound2Panel.hidden = tube.round2.solution.length === 0;
-  els.tubeRound2Title.textContent = `Round2：剩餘規格組合（${tube.round2Lengths.join("/")}mm 母管，不限修邊損耗）`;
+  els.tubeRound2Panel.hidden = tube.round2SequencedRows.length === 0;
+  els.tubeRound2Title.textContent = `Round2：剩餘規格組合（${tube.round2Lengths.join("/")}mm 母管，不限修邊損耗，依刀具移動最少排序）`;
   els.tubeRound2Table.innerHTML = "";
-  for (const row of tube.round2.solution) {
+  for (const row of tube.round2SequencedRows) {
     const sum = row.items.reduce((s, w) => s + w, 0);
     const waste = row.stockLength - sum;
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td>`;
+    tr.innerHTML = `<td>${row.seq}</td><td>${row.stockLength}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td><td>${row.move}</td>`;
     els.tubeRound2Table.appendChild(tr);
   }
 }
@@ -1036,21 +1066,21 @@ els.downloadFulfillBtn.addEventListener("click", () => {
 
 els.downloadTube1Btn.addEventListener("click", () => {
   if (!window.__lastTube) return;
-  const rows = [["母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)", "損耗率"]];
-  for (const row of window.__lastTube.round1.solution) {
+  const rows = [["生產順序", "母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)", "損耗率", "與前一支刀具移動距離(mm)"]];
+  for (const row of window.__lastTube.round1SequencedRows) {
     const sum = row.items.reduce((s, w) => s + w, 0);
     const waste = row.stockLength - sum;
-    rows.push([row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, waste, ((waste / row.stockLength) * 100).toFixed(2) + "%"]);
+    rows.push([row.seq, row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, waste, ((waste / row.stockLength) * 100).toFixed(2) + "%", row.move]);
   }
   downloadCSV("tube_plan_round1.csv", rows);
 });
 
 els.downloadTube2Btn.addEventListener("click", () => {
   if (!window.__lastTube) return;
-  const rows = [["母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)"]];
-  for (const row of window.__lastTube.round2.solution) {
+  const rows = [["生產順序", "母管長度(mm)", "母管數量", "組合規格(mm)", "段數", "合計寬度(mm)", "修邊損耗(mm)", "與前一支刀具移動距離(mm)"]];
+  for (const row of window.__lastTube.round2SequencedRows) {
     const sum = row.items.reduce((s, w) => s + w, 0);
-    rows.push([row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, row.stockLength - sum]);
+    rows.push([row.seq, row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, row.stockLength - sum, row.move]);
   }
   downloadCSV("tube_plan_round2.csv", rows);
 });
