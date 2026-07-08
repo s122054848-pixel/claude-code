@@ -54,7 +54,9 @@ const els = {
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
   timeLimit1: document.getElementById("timeLimit1"),
   timeLimit2: document.getElementById("timeLimit2"),
-  runBtn: document.getElementById("runBtn"),
+  runSlitBtn: document.getElementById("runSlitBtn"),
+  runFullBtn: document.getElementById("runFullBtn"),
+  runTubeBtn: document.getElementById("runTubeBtn"),
   statusBanner: document.getElementById("statusBanner"),
   statusSpinner: document.getElementById("statusSpinner"),
   statusLine: document.getElementById("statusLine"),
@@ -68,7 +70,6 @@ const els = {
   fulfillTable: document.getElementById("fulfillTable").querySelector("tbody"),
   downloadPlanBtn: document.getElementById("downloadPlanBtn"),
   downloadFulfillBtn: document.getElementById("downloadFulfillBtn"),
-  tubePlanEnabled: document.getElementById("tubePlanEnabled"),
   tubeLen1: document.getElementById("tubeLen1"),
   tubeLen2: document.getElementById("tubeLen2"),
   tubeLen3: document.getElementById("tubeLen3"),
@@ -93,19 +94,8 @@ const els = {
 
 els.ordersText.value = SAMPLE_CSV;
 
-function debounce(fn, wait) {
-  let t = null;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
-  };
-}
-
-const autoRun = debounce(() => runPipeline(), 600);
-
 els.loadSampleBtn.addEventListener("click", () => {
   els.ordersText.value = SAMPLE_CSV;
-  runPipeline();
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -114,30 +104,7 @@ els.fileInput.addEventListener("change", async () => {
   const buf = await file.arrayBuffer();
   const decoder = new TextDecoder(els.encodingSelect.value);
   els.ordersText.value = decoder.decode(buf);
-  runPipeline();
 });
-
-els.ordersText.addEventListener("input", autoRun);
-for (const id of [
-  "motherWidth",
-  "minPieces",
-  "minRollsPerPattern",
-  "timeLimit1",
-  "timeLimit2",
-  "tubeLen1",
-  "tubeLen2",
-  "tubeLen3",
-  "tubeLen4",
-  "tubeWasteTol",
-  "tubeStageTimeLimit",
-  "tubeR2Len1",
-  "tubeR2Len2",
-  "tubeR2Len3",
-  "tubeR2Len4",
-]) {
-  els[id].addEventListener("change", autoRun);
-}
-els.tubePlanEnabled.addEventListener("change", autoRun);
 
 // A single solve can legitimately take over a minute (harder MIPs with the
 // min-batch-size constraint don't converge quickly), during which only one
@@ -596,20 +563,13 @@ function readLengthList(ids) {
 // Round1 and Round2 each run 2 stages (max-fulfill, then min-tubes), so at
 // this per-stage cap the absolute worst case for round1+round2 combined is
 // 4 * cap; default 12s keeps that at 48s, comfortably under a 50s budget.
-async function runTubePlan(produced, t1, t2) {
+async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
   const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 12);
   const tubeT1 = Math.min(t1, tubeStageCap);
   const tubeT2 = Math.min(t2, tubeStageCap);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
-
-  const tubeWidths = Object.keys(produced)
-    .map(Number)
-    .filter((w) => (produced[String(w)] || 0) > 0)
-    .sort((a, b) => a - b);
-  const tubeDemand = {};
-  for (const w of tubeWidths) tubeDemand[String(w)] = produced[String(w)];
 
   const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
   const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2);
@@ -661,6 +621,18 @@ async function runTubePlan(produced, t1, t2) {
     round2Tubes,
     shortfall: totalDemand - round1Total - round2Total,
   };
+}
+
+// Wrapper for the "full" pipeline: derives tube-segment demand from the
+// slitting stage's produced roll counts, then delegates to the shared core.
+async function runTubePlan(produced, t1, t2) {
+  const tubeWidths = Object.keys(produced)
+    .map(Number)
+    .filter((w) => (produced[String(w)] || 0) > 0)
+    .sort((a, b) => a - b);
+  const tubeDemand = {};
+  for (const w of tubeWidths) tubeDemand[String(w)] = produced[String(w)];
+  return runTubePlanCore(tubeWidths, tubeDemand, t1, t2);
 }
 
 // ---- HiGHS wasm solving ----
@@ -762,8 +734,14 @@ function yieldToUI() {
 }
 
 // ---- main pipeline ----
-async function runPipeline() {
-  els.runBtn.disabled = true;
+// mode: "slit" (only the 6600mm cutting plan), "full" (6600 cutting plan
+// then feed its produced rolls into the 4600 tube plan), or "tube" (skip the
+// 6600 stage entirely and treat the imported width,qty data directly as
+// tube-segment demand).
+async function runPipeline(mode) {
+  els.runSlitBtn.disabled = true;
+  els.runFullBtn.disabled = true;
+  els.runTubeBtn.disabled = true;
   els.warningsPanel.hidden = true;
   els.warningsList.innerHTML = "";
   els.summaryPanel.hidden = true;
@@ -777,6 +755,23 @@ async function runPipeline() {
     const { widths, demand } = parseOrders(els.ordersText.value);
     if (widths.length === 0) {
       setStatus("找不到有效的訂單資料，請確認格式為「寬度,數量」。", "idle");
+      return;
+    }
+
+    if (mode === "tube") {
+      // ---- 4600 only: imported data is treated directly as tube-segment
+      // demand, bypassing the 6600mm slitting stage entirely. ----
+      setStatus("計算紙管組合計畫中...", "busy");
+      await yieldToUI();
+      const tube = await runTubePlanCore(widths, demand, Infinity, Infinity);
+      renderTubePlan(tube);
+      window.__lastPlan = null;
+      window.__lastFulfill = null;
+      window.__lastTube = tube;
+      setStatus(
+        `完成。共排產 ${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段，缺口 ${tube.shortfall} 段（Round1 ${tube.round1Tubes} 支/移動 ${tube.round1Movement}mm、Round2 ${tube.round2Tubes} 支/移動 ${tube.round2Movement}mm）。`,
+        tube.shortfall > 0 ? "warn" : "ok"
+      );
       return;
     }
 
@@ -905,7 +900,7 @@ async function runPipeline() {
     }));
 
     let tubeSummaryMsg = "";
-    if (els.tubePlanEnabled.checked) {
+    if (mode === "full") {
       setStatus("排刀計畫完成，計算紙管組合計畫中...", "busy");
       await yieldToUI();
       const tube = await runTubePlan(produced, t1, t2);
@@ -925,7 +920,9 @@ async function runPipeline() {
     console.error(err);
     setStatus("發生錯誤：" + (err && err.message ? err.message : String(err)), "error");
   } finally {
-    els.runBtn.disabled = false;
+    els.runSlitBtn.disabled = false;
+    els.runFullBtn.disabled = false;
+    els.runTubeBtn.disabled = false;
   }
 }
 
@@ -1085,8 +1082,10 @@ els.downloadTube2Btn.addEventListener("click", () => {
   downloadCSV("tube_plan_round2.csv", rows);
 });
 
-els.runBtn.addEventListener("click", runPipeline);
+els.runSlitBtn.addEventListener("click", () => runPipeline("slit"));
+els.runFullBtn.addEventListener("click", () => runPipeline("full"));
+els.runTubeBtn.addEventListener("click", () => runPipeline("tube"));
 
-// auto-run once on load with the pre-filled sample data, so results are
-// visible immediately without needing to press a button
-runPipeline();
+// auto-run the full pipeline once on load with the pre-filled sample data,
+// so results are visible immediately without needing to press a button
+runPipeline("full");

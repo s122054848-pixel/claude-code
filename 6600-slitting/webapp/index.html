@@ -13,7 +13,7 @@
       <span class="brand-mark">排刀</span>
       <div>
         <h1>母卷排刀規劃工具</h1>
-        <p class="subtitle">零修邊損耗・每卷刀數下限・不可超量・刀具移動最小化 — 匯入資料後自動計算，全程在瀏覽器端運算</p>
+        <p class="subtitle">零修邊損耗・每卷刀數下限・不可超量・刀具移動最小化 — 匯入資料後，自行選擇要執行的功能，全程在瀏覽器端運算</p>
       </div>
     </div>
   </div>
@@ -36,7 +36,7 @@
         </select>
       </label>
       <button id="loadSampleBtn" type="button" class="ghost full">載入範例資料</button>
-      <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>。上傳或修改後會自動重新計算。</p>
+      <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>。上傳或修改後，請於下方選擇要執行的功能。</p>
       <textarea id="ordersText" rows="10" spellcheck="false"></textarea>
     </section>
 
@@ -65,15 +65,10 @@
         </label>
       </div>
       <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。</p>
-      <button id="runBtn" type="button" class="primary full">重新計算</button>
     </section>
 
     <section class="panel">
-      <h2><span class="step">3</span>紙管組合計畫</h2>
-      <label class="field toggle">
-        <input type="checkbox" id="tubePlanEnabled" checked>
-        依裁切計畫產出的母卷數量，規劃紙管（母管）裁切組合
-      </label>
+      <h2><span class="step">3</span>紙管組合計畫參數</h2>
       <p class="hint">Round1：最多可指定 4 個母管長度，修邊損耗須低於上限。留空的欄位不使用。</p>
       <div class="field-grid">
         <label class="field">
@@ -122,9 +117,17 @@
       </div>
     </section>
 
+    <section class="panel">
+      <h2><span class="step">4</span>執行方式</h2>
+      <p class="hint">依實際需求選擇要執行的功能，可重複點擊任一按鈕以最新參數重新計算。</p>
+      <button id="runSlitBtn" type="button" class="ghost full">① 僅計算 6600 裁切</button>
+      <button id="runFullBtn" type="button" class="primary full">② 6600 裁切 + 4600 紙管（完整流程）</button>
+      <button id="runTubeBtn" type="button" class="ghost full">③ 僅計算 4600 紙管組合（訂單資料直接視為紙管段數需求）</button>
+    </section>
+
     <div id="statusBanner" class="status-banner state-idle">
       <span class="spinner" id="statusSpinner" hidden></span>
-      <span id="statusLine">請上傳或編輯訂單資料，系統會自動計算排刀方案。</span>
+      <span id="statusLine">請上傳或編輯訂單資料，然後於上方選擇要執行的功能。</span>
     </div>
   </aside>
 
