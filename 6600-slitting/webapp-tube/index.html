@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>紙管組合規劃工具</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark">紙管</span>
+      <div>
+        <h1>紙管組合規劃工具</h1>
+        <p class="subtitle">匯入的「寬度,數量」資料直接視為紙管段數需求，不經過 6600mm 排刀階段 — 匯入後自動計算，全程在瀏覽器端運算</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <section class="panel">
+      <h2><span class="step">1</span>紙管需求資料</h2>
+      <label class="field">
+        上傳 CSV 檔案
+        <input type="file" id="fileInput" accept=".csv,text/csv">
+      </label>
+      <label class="field">
+        檔案編碼
+        <select id="encodingSelect">
+          <option value="utf-8" selected>UTF-8</option>
+          <option value="big5">Big5（繁體中文 Excel 常見編碼）</option>
+          <option value="gb18030">GB18030 / GBK（簡體中文）</option>
+        </select>
+      </label>
+      <button id="loadSampleBtn" type="button" class="ghost full">載入範例資料</button>
+      <p class="hint">格式：每行「寬度,數量」，例如 <code>2100,149</code>，代表需要多少段該寬度的紙管。上傳或修改後會自動重新計算。</p>
+      <textarea id="ordersText" rows="12" spellcheck="false"></textarea>
+    </section>
+
+    <section class="panel">
+      <h2><span class="step">2</span>紙管組合參數</h2>
+      <p class="hint">Round1：最多可指定 4 個母管長度，修邊損耗須低於上限。留空的欄位不使用。</p>
+      <div class="field-grid">
+        <label class="field">
+          Round1 長度 1 (mm)
+          <input type="number" id="tubeLen1" value="4600" min="1" step="1">
+        </label>
+        <label class="field">
+          Round1 長度 2 (mm)
+          <input type="number" id="tubeLen2" value="4400" min="1" step="1">
+        </label>
+        <label class="field">
+          Round1 長度 3 (mm)
+          <input type="number" id="tubeLen3" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round1 長度 4 (mm)
+          <input type="number" id="tubeLen4" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round1 最大修邊損耗率 (%)
+          <input type="number" id="tubeWasteTol" value="2" min="0" step="0.1">
+        </label>
+        <label class="field">
+          紙管求解時限 (每階段,秒)
+          <input type="number" id="tubeStageTimeLimit" value="12" min="1" step="1">
+        </label>
+      </div>
+      <p class="hint">Round1、Round2 各分兩階段求解，預設 12 秒／階段可讓 Round1+Round2 最壞情況總時間落在 50 秒內。Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
+      <div class="field-grid">
+        <label class="field">
+          Round2 長度 1 (mm)
+          <input type="number" id="tubeR2Len1" value="4200" min="1" step="1">
+        </label>
+        <label class="field">
+          Round2 長度 2 (mm)
+          <input type="number" id="tubeR2Len2" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round2 長度 3 (mm)
+          <input type="number" id="tubeR2Len3" step="1" placeholder="不使用">
+        </label>
+        <label class="field">
+          Round2 長度 4 (mm)
+          <input type="number" id="tubeR2Len4" step="1" placeholder="不使用">
+        </label>
+      </div>
+      <button id="runBtn" type="button" class="primary full">重新計算</button>
+    </section>
+
+    <div id="statusBanner" class="status-banner state-idle">
+      <span class="spinner" id="statusSpinner" hidden></span>
+      <span id="statusLine">請上傳或編輯紙管需求資料，系統會自動計算紙管組合計畫。</span>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section class="panel" id="tubeSummaryPanel" hidden>
+      <h2>紙管組合計畫摘要</h2>
+      <div class="cards" id="tubeSummaryCards"></div>
+    </section>
+
+    <section class="panel" id="tubeRound1Panel" hidden>
+      <div class="panel-head">
+        <h2 id="tubeRound1Title">Round1：母管組合</h2>
+        <button id="downloadTube1Btn" type="button" class="ghost">下載 CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table id="tubeRound1Table">
+          <thead>
+            <tr><th>母管長度 (mm)</th><th>母管數量</th><th>組合規格 (mm)</th><th>段數</th><th>合計寬度 (mm)</th><th>修邊損耗 (mm)</th><th>損耗率</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="tubeRound2Panel" hidden>
+      <div class="panel-head">
+        <h2 id="tubeRound2Title">Round2：剩餘規格組合</h2>
+        <button id="downloadTube2Btn" type="button" class="ghost">下載 CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table id="tubeRound2Table">
+          <thead>
+            <tr><th>母管長度 (mm)</th><th>母管數量</th><th>組合規格 (mm)</th><th>段數</th><th>合計寬度 (mm)</th><th>修邊損耗 (mm)</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="vendor/highs.js"></script>
+<script src="vendor/highs-wasm-base64.js"></script>
+<script src="vendor/worker-bundle.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
