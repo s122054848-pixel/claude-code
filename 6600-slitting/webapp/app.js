@@ -872,29 +872,33 @@ async function runPipeline(mode) {
     }
 
     const minBatch = Math.max(1, Math.round(Number(els.minRollsPerPattern.value)) || 1);
-    const patternsFull = patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
 
-    // ---- large-width-priority pass: strict lexicographic, largest width
-    // first. Each width is solved on its own ("maximize only this width's
-    // fulfilled count"), with every previously-processed (larger) width
-    // pinned to an exact equality lock (both a tightened demand cap AND a
-    // matching perWidthFloor) so a later, smaller width's solve can never
-    // claw back capacity from an already-decided larger one. This can mean
-    // the overall total (fulfillment rate) ends up below the theoretical
-    // unweighted maximum - zero-trim-loss patterns that pack many small
-    // pieces per roll naturally maximize raw piece count, which is
-    // fundamentally in tension with prioritizing large pieces.
-    const sortedWidthsDesc = widths.filter((w) => (demand[String(w)] || 0) > 0).sort((a, b) => b - a);
+    // ---- Round1: top 30% largest distinct widths, combined strictly
+    // large-to-small. Uses the full pattern set (any width may appear in a
+    // pattern, since a large width almost never has a zero-waste partner
+    // within its own size tier alone) but only the top-30% widths go
+    // through the strict priority ordering: each is solved on its own
+    // ("maximize only this width's fulfilled count"), with every
+    // previously-processed (larger, already-decided) width pinned to an
+    // exact equality lock (both a tightened demand cap AND a matching
+    // perWidthFloor) so a later, smaller width's solve can never claw back
+    // capacity from an already-decided larger one. Smaller (non-round1)
+    // widths are left unconstrained here and may get incidental production
+    // as a side effect of packing rolls efficiently - Round2 below picks up
+    // whatever demand is still outstanding afterwards.
+    const distinctWidthsDesc = widths.filter((w) => (demand[String(w)] || 0) > 0).sort((a, b) => b - a);
+    const round1Count = Math.max(1, Math.ceil(distinctWidthsDesc.length * 0.3));
+    const round1WidthsDesc = distinctWidthsDesc.slice(0, round1Count);
+
     const lockedDemand = { ...demand };
     const lockedFloor = {};
-    const achieved = {};
-    let lastPrioritySol = null;
-    let prioritySolvedCount = 0;
+    const round1Achieved = {};
+    let lastRound1Sol = null;
 
-    for (let idx = 0; idx < sortedWidthsDesc.length; idx++) {
-      const w = sortedWidthsDesc[idx];
+    for (let idx = 0; idx < round1WidthsDesc.length; idx++) {
+      const w = round1WidthsDesc[idx];
       setStatus(
-        `優先滿足大尺寸門幅中（${idx + 1}/${sortedWidthsDesc.length}，規格 ${w}mm，最多 ${priorityCap} 秒）...`,
+        `Round1：大尺寸門幅組合中（${idx + 1}/${round1WidthsDesc.length}，規格 ${w}mm，最多 ${priorityCap} 秒）...`,
         "busy"
       );
       await yieldToUI();
@@ -906,60 +910,112 @@ async function runPipeline(mode) {
       });
       const solPriority = await solveLP(lpPriority, priorityCap);
       const val = solPriority && Number.isFinite(solPriority.ObjectiveValue) ? Math.max(0, Math.round(solPriority.ObjectiveValue)) : 0;
-      achieved[String(w)] = val;
+      round1Achieved[String(w)] = val;
       lockedDemand[String(w)] = val;
       lockedFloor[String(w)] = val;
-      lastPrioritySol = solPriority;
-      prioritySolvedCount++;
+      lastRound1Sol = solPriority;
     }
 
-    const totalDemand0 = widths.reduce((s, w) => s + (demand[String(w)] || 0), 0);
-    const totalAchieved = Object.values(achieved).reduce((a, b) => a + b, 0);
-    if (totalDemand0 > 0 && totalAchieved === 0) {
+    const round1Total = Object.values(round1Achieved).reduce((a, b) => a + b, 0);
+    const patternsFull = patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
+    let round1Rows = [];
+    let round1Produced = {};
+    let round1RollsStatus = "N/A";
+    if (round1Total > 0) {
       setStatus(
-        "大尺寸優先分配未能求得任何排產量，請調整時間上限或參數後再試一次。",
-        "error"
+        `Round1：大尺寸組合完成，共排產 ${round1Total} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
+        "busy"
       );
-      return;
+      await yieldToUI();
+      const lpR1Rolls = buildLP(patterns, patternCounts, widths, demand, {
+        mode: "min_rolls",
+        fulfillFloor: round1Total,
+        minBatch,
+        perWidthFloor: round1Achieved,
+      });
+      const solR1Rolls = await solveLP(lpR1Rolls, t2);
+      let extR1 = extractPatternSolution(solR1Rolls, patternsFull, widths);
+      if (extR1.totalProduced < round1Total - 0.5) {
+        // min-rolls failed to find any solution meeting the per-width floors
+        // (timed out with no incumbent) - fall back to the last per-width
+        // solve, whose accumulated equality locks already constitute one
+        // complete feasible assignment achieving them all.
+        extR1 = extractPatternSolution(lastRound1Sol, patternsFull, widths);
+      }
+      round1Rows = extR1.rows;
+      round1Produced = extR1.produced;
+      round1RollsStatus = solR1Rolls ? solR1Rolls.Status : "Failed";
     }
 
-    setStatus(
-      `大尺寸優先分配完成，共排產 ${totalAchieved} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
-      "busy"
-    );
-    await yieldToUI();
-    const lp2 = buildLP(patterns, patternCounts, widths, demand, {
-      mode: "min_rolls",
-      fulfillFloor: totalAchieved,
-      minBatch,
-      perWidthFloor: achieved,
-    });
-    const sol2 = await solveLP(lp2, t2);
+    // ---- Round2: everything Round1 didn't fully cut (leftover large-width
+    // demand + all remaining smaller widths), solved the original way -
+    // maximize fulfillment (highest yield rate), then minimize rolls - with
+    // no large-width restriction, freely mixing widths of any size.
+    const remainingWidths = widths.filter((w) => (demand[String(w)] || 0) - (round1Produced[String(w)] || 0) > 0);
+    const remainingDemand = {};
+    for (const w of remainingWidths) remainingDemand[String(w)] = demand[String(w)] - (round1Produced[String(w)] || 0);
 
-    if (!sol2 || !sol2.Columns) {
-      setStatus("最少母卷數求解失敗，請調整時間上限或參數後再試一次。", "error");
-      return;
+    let round2Rows = [];
+    let round2Produced = {};
+    let round2Status = "N/A";
+    if (remainingWidths.length > 0) {
+      setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy");
+      await yieldToUI();
+      const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces);
+      if (round2Patterns.length > 0) {
+        const round2PatternCounts = round2Patterns.map(patternToCounts);
+        const round2PatternsFull = round2Patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
+        const lpR2a = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
+          mode: "max_fulfill",
+          minBatch,
+        });
+        const solR2a = await solveLP(lpR2a, t2);
+        const round2Floor = solR2a && Number.isFinite(solR2a.ObjectiveValue) ? Math.round(solR2a.ObjectiveValue) : 0;
+
+        if (round2Floor > 0) {
+          setStatus(
+            `Round2：最高排抄率為 ${round2Floor} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
+            "busy"
+          );
+          await yieldToUI();
+          const lpR2b = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
+            mode: "min_rolls",
+            fulfillFloor: round2Floor,
+            minBatch,
+          });
+          const solR2b = await solveLP(lpR2b, t2);
+          let extR2 = extractPatternSolution(solR2b, round2PatternsFull, remainingWidths);
+          if (extR2.totalProduced < round2Floor - 0.5) {
+            extR2 = extractPatternSolution(solR2a, round2PatternsFull, remainingWidths);
+          }
+          round2Rows = extR2.rows;
+          round2Produced = extR2.produced;
+          round2Status = solR2b ? solR2b.Status : "Failed";
+        }
+      }
     }
 
-    // ---- extract solution ----
-    let ext = extractPatternSolution(sol2, patternsFull, widths);
-    if (ext.totalProduced < totalAchieved - 0.5) {
-      // min-rolls stage failed to find any solution meeting the per-width
-      // floors (timed out with no incumbent) - fall back to the priority
-      // pass's own last solve, whose accumulated equality locks already
-      // constitute one complete feasible assignment achieving them all.
-      ext = extractPatternSolution(lastPrioritySol, patternsFull, widths);
+    // ---- combine Round1 + Round2 into one production plan, merging any
+    // identical patterns produced independently by both rounds.
+    const mergedRowsMap = new Map();
+    for (const row of [...round1Rows, ...round2Rows]) {
+      const key = row.items.join(",");
+      const existing = mergedRowsMap.get(key);
+      if (existing) existing.count += row.count;
+      else mergedRowsMap.set(key, { ...row });
     }
-    if (totalAchieved > 0 && ext.totalProduced === 0) {
+    const solutionRows = Array.from(mergedRowsMap.values());
+    const produced = {};
+    for (const w of widths) produced[String(w)] = (round1Produced[String(w)] || 0) + (round2Produced[String(w)] || 0);
+    const totalRolls = solutionRows.reduce((s, r) => s + r.count, 0);
+
+    if (widths.some((w) => (demand[String(w)] || 0) > 0) && totalRolls === 0) {
       setStatus(
         "求解器回報了排產量但沒有實際找到可行解（可能是時限內找不到解），請調整時間上限或參數後再試一次。",
         "error"
       );
       return;
     }
-    const solutionRows = ext.rows;
-    const produced = ext.produced;
-    const totalRolls = solutionRows.reduce((s, r) => s + r.count, 0);
 
     setStatus(`排出 ${solutionRows.length} 種刀路，計算刀具移動距離最小的生產順序中...`, "busy");
     await yieldToUI();
@@ -981,8 +1037,8 @@ async function runPipeline(mode) {
       totalRolls,
       patternTypes: sequencedRows.length,
       totalKnifeMovement: totalCost,
-      priorityStatus: `${prioritySolvedCount}/${sortedWidthsDesc.length} 規格已依序求解`,
-      rollsStatus: sol2.Status,
+      priorityStatus: `Round1：${round1WidthsDesc.length} 規格大到小組合（${round1RollsStatus}）`,
+      rollsStatus: `Round2：${remainingWidths.length} 規格最高排抄率（${round2Status}）`,
     });
     renderPlanTable(sequencedRows);
     renderFulfillTable(widths, demand, produced);
@@ -1041,8 +1097,8 @@ function renderSummary({
     { label: "使用母卷數", value: totalRolls },
     { label: "刀路種類數", value: patternTypes },
     { label: "刀具總移動距離 (mm)", value: totalKnifeMovement },
-    { label: "大尺寸優先分配", value: priorityStatus },
-    { label: "最少母卷數求解狀態", value: rollsStatus },
+    { label: "Round1 狀態", value: priorityStatus },
+    { label: "Round2 狀態", value: rollsStatus },
   ];
   els.summaryCards.innerHTML = "";
   for (const c of cards) {
