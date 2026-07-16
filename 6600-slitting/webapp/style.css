@@ -194,6 +194,12 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin-top: 4px;
+}
+
 textarea {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

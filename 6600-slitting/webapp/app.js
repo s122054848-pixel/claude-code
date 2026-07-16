@@ -52,6 +52,8 @@ const els = {
   motherWidth: document.getElementById("motherWidth"),
   maxPieces: document.getElementById("maxPieces"),
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
+  round1Pct: document.getElementById("round1Pct"),
+  round1PctValue: document.getElementById("round1PctValue"),
   timeLimit1: document.getElementById("timeLimit1"),
   timeLimit2: document.getElementById("timeLimit2"),
   runSlitBtn: document.getElementById("runSlitBtn"),
@@ -104,6 +106,10 @@ els.fileInput.addEventListener("change", async () => {
   const buf = await file.arrayBuffer();
   const decoder = new TextDecoder(els.encodingSelect.value);
   els.ordersText.value = decoder.decode(buf);
+});
+
+els.round1Pct.addEventListener("input", () => {
+  els.round1PctValue.textContent = `${els.round1Pct.value}%`;
 });
 
 // A single solve can legitimately take over a minute (harder MIPs with the
@@ -873,21 +879,23 @@ async function runPipeline(mode) {
 
     const minBatch = Math.max(1, Math.round(Number(els.minRollsPerPattern.value)) || 1);
 
-    // ---- Round1: top 30% largest distinct widths, combined strictly
-    // large-to-small. Uses the full pattern set (any width may appear in a
-    // pattern, since a large width almost never has a zero-waste partner
-    // within its own size tier alone) but only the top-30% widths go
-    // through the strict priority ordering: each is solved on its own
-    // ("maximize only this width's fulfilled count"), with every
-    // previously-processed (larger, already-decided) width pinned to an
-    // exact equality lock (both a tightened demand cap AND a matching
-    // perWidthFloor) so a later, smaller width's solve can never claw back
-    // capacity from an already-decided larger one. Smaller (non-round1)
-    // widths are left unconstrained here and may get incidental production
-    // as a side effect of packing rolls efficiently - Round2 below picks up
-    // whatever demand is still outstanding afterwards.
+    // ---- Round1: user-adjustable top N% of largest distinct widths (slider,
+    // default 40%), combined strictly large-to-small. Uses the full pattern
+    // set (any width may appear in a pattern, since a large width almost
+    // never has a zero-waste partner within its own size tier alone) but
+    // only the top-N% widths go through the strict priority ordering: each
+    // is solved on its own ("maximize only this width's fulfilled count"),
+    // with every previously-processed (larger, already-decided) width
+    // pinned to an exact equality lock (both a tightened demand cap AND a
+    // matching perWidthFloor) so a later, smaller width's solve can never
+    // claw back capacity from an already-decided larger one. Smaller
+    // (non-round1) widths are left unconstrained here and may get incidental
+    // production as a side effect of packing rolls efficiently - Round2
+    // below picks up whatever demand is still outstanding afterwards.
+    const round1PctValue = Math.min(100, Math.max(0, Number(els.round1Pct.value)));
     const distinctWidthsDesc = widths.filter((w) => (demand[String(w)] || 0) > 0).sort((a, b) => b - a);
-    const round1Count = Math.max(1, Math.ceil(distinctWidthsDesc.length * 0.3));
+    const round1Count =
+      round1PctValue <= 0 ? 0 : Math.max(1, Math.ceil(distinctWidthsDesc.length * (round1PctValue / 100)));
     const round1WidthsDesc = distinctWidthsDesc.slice(0, round1Count);
 
     const lockedDemand = { ...demand };
