@@ -64,7 +64,7 @@
           <input type="number" id="timeLimit2" value="30" min="1" step="1">
         </label>
       </div>
-      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。</p>
+      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。求解共分三階段：①最大排產量（Stage1 時限）②優先滿足大尺寸門幅的分配（同樣使用 Stage1 時限）③最少母卷數（Stage2 時限），最壞情況總時間約為 2×Stage1 + Stage2。</p>
     </section>
 
     <section class="panel">
@@ -96,7 +96,7 @@
           <input type="number" id="tubeStageTimeLimit" value="12" min="1" step="1">
         </label>
       </div>
-      <p class="hint">Round1、Round2 各分兩階段求解，預設 12 秒／階段可讓 Round1+Round2 最壞情況總時間落在 50 秒內。Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
+      <p class="hint">Round1、Round2 各分三階段求解（含優先滿足大尺寸門幅），預設 12 秒／階段可讓 Round1+Round2 最壞情況總時間落在 72 秒內。Round2：Round1 排不進的規格，改用以下最多 4 個母管長度繼續組合（不限修邊損耗）。留空的欄位不使用。</p>
       <div class="field-grid">
         <label class="field">
           Round2 長度 1 (mm)

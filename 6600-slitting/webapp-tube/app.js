@@ -194,9 +194,23 @@ function patternToCounts(pattern) {
 // could never reach minBatch even alone are dropped entirely. Not used by
 // the tube plan today (no min-batch requirement there), but buildLP stays
 // generic since it's shared with the full slitting+tube webapp.
+// opts.weightFn(width): per-unit-width coefficient used in the "max_fulfill"
+// objective, defaulting to a flat 1 (plain piece-count maximization). Passing
+// e.g. (w) => w instead maximizes total fulfilled *width*, which - for a
+// fixed total piece count (see opts.fulfillFloor below) - biases the chosen
+// mix towards fulfilling larger widths over smaller ones.
+// opts.fulfillFloor: if set, adds a "total fulfilled pieces >= floor"
+// constraint regardless of mode (used both to pin "min_rolls" to the
+// max-fulfillment stage's result, and to pin a weighted re-solve to not
+// regress below the plain max).
+// opts.perWidthFloor: { [width]: minCount } - adds a per-width "fulfilled
+// >= minCount" constraint for each listed width, used to carry a
+// large-width-priority allocation (computed by a weighted solve) forward
+// into the min-rolls stage so roll-count optimization can't undo it.
 function buildLP(patterns, patternCounts, widths, demand, opts) {
   const nPat = patterns.length;
   const minBatch = opts.minBatch || 0;
+  const weightFn = opts.weightFn || (() => 1);
   const lines = [];
 
   const activeIdx = [];
@@ -214,12 +228,19 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
     activeIdx.push(i);
   }
 
-  if (opts.mode === "max_fulfill") {
-    lines.push("Maximize");
-    lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `${patterns[i].length} x${i}`).join(" + ") : "0"));
-  } else {
+  if (opts.mode === "min_rolls") {
     lines.push("Minimize");
     lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `x${i}`).join(" + ") : "0"));
+  } else {
+    lines.push("Maximize");
+    lines.push(
+      " obj: " +
+        (activeIdx.length
+          ? activeIdx
+              .map((i) => `${patterns[i].reduce((s, w) => s + weightFn(w), 0)} x${i}`)
+              .join(" + ")
+          : "0")
+    );
   }
 
   lines.push("Subject To");
@@ -242,9 +263,20 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
     lines.push(` c${key}: ${expr} <= ${demand[key] || 0}`);
   }
 
-  if (opts.mode === "min_rolls") {
+  if (opts.fulfillFloor != null) {
     const fulfillTerms = activeIdx.length ? activeIdx.map((i) => `${patterns[i].length} x${i}`).join(" + ") : "0 dummy";
     lines.push(` c_fulfill: ${fulfillTerms} >= ${opts.fulfillFloor}`);
+  }
+
+  if (opts.perWidthFloor) {
+    for (const w of widths) {
+      const floor = opts.perWidthFloor[String(w)] || 0;
+      if (floor <= 0) continue;
+      const key = String(w);
+      const terms = widthTerms.get(key) || [];
+      const expr = terms.length ? terms.join(" + ") : activeIdx.length ? `0 x${activeIdx[0]}` : "0 dummy";
+      lines.push(` cfloor_${key}: ${expr} >= ${floor}`);
+    }
   }
 
   if (minBatch > 1) {
@@ -501,9 +533,15 @@ function extractPatternSolution(sol, patternsFull, widths) {
   return { rows, produced, totalProduced };
 }
 
-// Generic two-stage (max fulfillment, then min tube count) solve over an
-// arbitrary set of {items, stockLength} patterns - reuses buildLP/solveLP
-// since the LP itself only cares about widths, not the actual stock length.
+// Generic three-stage solve over an arbitrary set of {items, stockLength}
+// patterns - reuses buildLP/solveLP since the LP itself only cares about
+// widths, not the actual stock length:
+//   1. max fulfillment (plain piece count) -> fulfillFloor
+//   2. among solutions achieving fulfillFloor, maximize total fulfilled
+//      *width* (weightFn = width) -> a per-width allocation that prioritizes
+//      larger widths without sacrificing the overall fulfillment rate
+//   3. min tube count, pinned to stage 2's per-width allocation so
+//      roll-count optimization can't trade large-width fulfillment away
 async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
   if (patternsFull.length === 0 || widths.length === 0) {
     return { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
@@ -514,15 +552,34 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
   const sol1 = await solveLP(lp1, t1);
   const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
 
-  const lp2 = buildLP(itemsList, counts, widths, demand, { mode: "min_rolls", fulfillFloor });
+  const lpPriority = buildLP(itemsList, counts, widths, demand, {
+    mode: "max_fulfill",
+    fulfillFloor,
+    weightFn: (w) => w,
+  });
+  const solPriority = await solveLP(lpPriority, t1);
+  let extPriority = extractPatternSolution(solPriority, patternsFull, widths);
+  if (extPriority.totalProduced < fulfillFloor - 0.5) {
+    // weighted re-solve failed to reach the floor (timed out with no
+    // incumbent) - fall back to stage1's own (unweighted) solution.
+    extPriority = extractPatternSolution(sol1, patternsFull, widths);
+  }
+  const priorityFloor = {};
+  for (const w of widths) priorityFloor[String(w)] = extPriority.produced[String(w)] || 0;
+
+  const lp2 = buildLP(itemsList, counts, widths, demand, {
+    mode: "min_rolls",
+    fulfillFloor,
+    perWidthFloor: priorityFloor,
+  });
   const sol2 = await solveLP(lp2, t2);
 
   let ext = extractPatternSolution(sol2, patternsFull, widths);
   if (ext.totalProduced < fulfillFloor - 0.5) {
-    // stage2 failed to find any solution meeting the fulfillment floor
-    // (timed out with no incumbent) - fall back to stage1's own solution,
-    // which is already known to achieve fulfillFloor.
-    ext = extractPatternSolution(sol1, patternsFull, widths);
+    // stage3 failed to find any solution meeting the per-width floors
+    // (timed out with no incumbent) - fall back to stage2's own solution,
+    // which is already known to achieve them.
+    ext = extPriority;
   }
   ext.rows.sort((a, b) => b.count - a.count);
 
@@ -542,9 +599,10 @@ function readLengthList(ids) {
 
 // The tube-plan patterns are far fewer/simpler than a full slitting problem
 // and consistently solve in a few seconds, so each stage gets its own small
-// time budget. Round1 and Round2 each run 2 stages (max-fulfill, then
-// min-tubes), so at this per-stage cap the absolute worst case for
-// round1+round2 combined is 4 * cap; default 12s keeps that at 48s.
+// time budget. Round1 and Round2 each run 3 stages (max-fulfill,
+// large-width-priority re-solve, then min-tubes), so at this per-stage cap
+// the absolute worst case for round1+round2 combined is 6 * cap; default
+// 12s keeps that at 72s.
 async function runTubePlan(demand, widths) {
   const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 12);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
