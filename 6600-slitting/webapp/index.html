@@ -56,15 +56,15 @@
           <input type="number" id="minRollsPerPattern" value="3" min="1" step="1">
         </label>
         <label class="field">
-          Stage1 時限 (秒)
-          <input type="number" id="timeLimit1" value="30" min="1" step="1">
+          大尺寸優先，每規格時限 (秒)
+          <input type="number" id="timeLimit1" value="8" min="1" step="1">
         </label>
         <label class="field">
-          Stage2 時限 (秒)
+          最少母卷數時限 (秒)
           <input type="number" id="timeLimit2" value="30" min="1" step="1">
         </label>
       </div>
-      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。求解共分三階段：①最大排產量（Stage1 時限）②優先滿足大尺寸門幅的分配（同樣使用 Stage1 時限）③最少母卷數（Stage2 時限），最壞情況總時間約為 2×Stage1 + Stage2。</p>
+      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。求解方式：依門幅由大到小，逐一規格求解「在不影響更大規格已排產量的前提下，該規格最多能排多少」，再統一求解最少母卷數。規格數較多時，總時間約為「規格數 × 每規格時限」再加上最少母卷數時限，可能需要數分鐘，過程中會顯示目前處理到第幾種規格。若為了讓大規格優先滿足，整體排產片數（滿足率）可能略低於理論最大值。</p>
     </section>
 
     <section class="panel">
