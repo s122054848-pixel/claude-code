@@ -50,7 +50,7 @@ const els = {
   loadSampleBtn: document.getElementById("loadSampleBtn"),
   ordersText: document.getElementById("ordersText"),
   motherWidth: document.getElementById("motherWidth"),
-  minPieces: document.getElementById("minPieces"),
+  maxPieces: document.getElementById("maxPieces"),
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
   timeLimit1: document.getElementById("timeLimit1"),
   timeLimit2: document.getElementById("timeLimit2"),
@@ -161,21 +161,21 @@ function parseOrders(text) {
   return { widths, demand };
 }
 
-// ---- pattern generation: all multisets of widths (count >= minPieces)
-// summing to exactly motherWidth ----
-function generatePatterns(widths, motherWidth, minPieces) {
+// ---- pattern generation: all multisets of widths (count <= maxPieces, no
+// lower bound on count) summing to exactly motherWidth ----
+function generatePatterns(widths, motherWidth, maxPieces) {
   const n = widths.length;
   if (n === 0) return [];
-  const maxPieces = Math.floor(motherWidth / widths[0]);
+  const effectiveMaxPieces = Math.min(Math.floor(motherWidth / widths[0]), maxPieces);
   const patterns = [];
   const combo = [];
 
   function dfs(startIdx, count, total) {
-    if (total === motherWidth && count >= minPieces) {
+    if (total === motherWidth) {
       patterns.push(combo.slice());
       return;
     }
-    if (total > motherWidth || count >= maxPieces) return;
+    if (total > motherWidth || count >= effectiveMaxPieces) return;
     for (let i = startIdx; i < n; i++) {
       const w = widths[i];
       if (total + w > motherWidth) break; // sorted ascending, no smaller options later
@@ -833,7 +833,7 @@ async function runPipeline(mode) {
     }
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
-    const minPieces = Math.max(1, Math.round(Number(els.minPieces.value)));
+    const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 8);
     const t2 = Math.max(1, Number(els.timeLimit2.value) || 30);
 
@@ -844,11 +844,11 @@ async function runPipeline(mode) {
 
     setStatus("產生所有可行刀路組合中...", "busy");
     await yieldToUI();
-    const patterns = generatePatterns(widths, motherWidth, minPieces);
+    const patterns = generatePatterns(widths, motherWidth, maxPieces);
 
     if (patterns.length === 0) {
       setStatus(
-        `在母卷寬度 ${motherWidth}mm、每卷至少 ${minPieces} 刀的限制下，找不到任何「零修邊損耗」的組合，請調整參數。`,
+        `在母卷寬度 ${motherWidth}mm、每卷最多 ${maxPieces} 刀的限制下，找不到任何「零修邊損耗」的組合，請調整參數。`,
         "error"
       );
       return;
@@ -866,7 +866,7 @@ async function runPipeline(mode) {
       els.warningsPanel.hidden = false;
       for (const w of uncovered) {
         const li = document.createElement("li");
-        li.textContent = `規格 ${w}mm（訂量 ${demand[String(w)]}）無法組成任何零修邊損耗且刀數 >= ${minPieces} 的刀路，將完全無法排產。`;
+        li.textContent = `規格 ${w}mm（訂量 ${demand[String(w)]}）無法組成任何零修邊損耗且刀數 <= ${maxPieces} 的刀路，將完全無法排產。`;
         els.warningsList.appendChild(li);
       }
     }
