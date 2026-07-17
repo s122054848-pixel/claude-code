@@ -152,6 +152,12 @@ function setStatus(msg, state) {
 }
 
 // ---- parsing ----
+// Accepts two input shapes per line:
+//  - simple "寬度,數量" (or space-separated) pairs, e.g. "2100,149"
+//  - the ERP order export format: 訂單編號,項次,客戶編號,客戶名稱,料號,門幅,需求量
+//    (>= 7 comma-separated columns), where 門幅/需求量 are columns 6 and 7
+//    (index 5/6) - other columns are ignored, and rows sharing the same
+//    門幅 are summed together same as the simple format.
 function parseOrders(text) {
   const widths = [];
   const demand = {};
@@ -159,10 +165,17 @@ function parseOrders(text) {
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
-    const parts = line.split(/[,，\s]+/).map((s) => s.trim()).filter((s) => s.length);
-    if (parts.length < 2) continue;
-    const w = Number(parts[0]);
-    const q = Number(parts[1]);
+    const commaParts = line.split(/[,，]/).map((s) => s.trim()).filter((s) => s.length);
+    let w, q;
+    if (commaParts.length >= 7) {
+      w = Number(commaParts[5]);
+      q = Number(commaParts[6]);
+    } else {
+      const parts = line.split(/[,，\s]+/).map((s) => s.trim()).filter((s) => s.length);
+      if (parts.length < 2) continue;
+      w = Number(parts[0]);
+      q = Number(parts[1]);
+    }
     if (!Number.isFinite(w) || !Number.isFinite(q)) continue; // header or bad row
     if (w <= 0) continue;
     const key = String(w);
