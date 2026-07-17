@@ -65,10 +65,14 @@
         </label>
       </div>
       <label class="field">
+        容許修邊尺寸：<span id="trimAllowanceValue">0mm</span>
+        <input type="range" id="trimAllowance" min="0" max="600" step="10" value="0">
+      </label>
+      <label class="field">
         Round1 大規格比例：<span id="round1PctValue">20%</span>
         <input type="range" id="round1Pct" min="0" max="100" step="2" value="20">
       </label>
-      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。求解分兩輪：Round1 僅取訂單中最大的前 N% 規格（N 由上方滑桿調整，預設 20%），只用這些大規格互相組合，依門幅由大到小逐一求解「在不影響更大規格已排產量的前提下，該規格最多能排多少」；Round2 將 Round1 沒排上的訂單（含剩餘的大規格與其餘規格）自由混合，依最高排抄率（原始的最大排產量再求最少母卷數）重新求解一次。規格數較多、或 Round1 比例調高時，Round1 總時間約為「Round1 規格數 × 每規格時限」，加上兩輪的最少母卷數時限，可能需要數分鐘，過程中會顯示目前處理到第幾種規格。若為了讓大規格優先滿足，整體排產片數（滿足率）可能略低於理論最大值。</p>
+      <p class="hint">每種刀路一旦採用，母卷數量須大於此門檻（0 或 ≥ 此值），避免只生產 1~2 支的零星刀路。容許修邊尺寸：預設 0（零修邊損耗，刀路須恰好湊滿母卷寬度），調高後每個刀路的合計寬度可低於母卷寬度，最多差此上限（即修邊損耗 ≤ 此值），能排出的組合更多。求解分兩輪：Round1 僅取訂單中最大的前 N% 規格（N 由上方滑桿調整，預設 20%），只用這些大規格互相組合，依門幅由大到小逐一求解「在不影響更大規格已排產量的前提下，該規格最多能排多少」；Round2 將 Round1 沒排上的訂單（含剩餘的大規格與其餘規格）自由混合，依最高排抄率（原始的最大排產量再求最少母卷數）重新求解一次。規格數較多、或 Round1 比例調高時，Round1 總時間約為「Round1 規格數 × 每規格時限」，加上兩輪的最少母卷數時限，可能需要數分鐘，過程中會顯示目前處理到第幾種規格。若為了讓大規格優先滿足，整體排產片數（滿足率）可能略低於理論最大值。</p>
     </section>
 
     <section class="panel">
@@ -155,7 +159,7 @@
       <div class="table-wrap">
         <table id="planTable">
           <thead>
-            <tr><th>順序</th><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th><th>移動距離 (mm)</th></tr>
+            <tr><th>順序</th><th>母卷數量</th><th>裁切規格 (mm)</th><th>刀數</th><th>合計寬度 (mm)</th><th>修邊損耗 (mm)</th><th>移動距離 (mm)</th></tr>
           </thead>
           <tbody></tbody>
         </table>

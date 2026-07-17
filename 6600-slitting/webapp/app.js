@@ -52,6 +52,8 @@ const els = {
   motherWidth: document.getElementById("motherWidth"),
   maxPieces: document.getElementById("maxPieces"),
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
+  trimAllowance: document.getElementById("trimAllowance"),
+  trimAllowanceValue: document.getElementById("trimAllowanceValue"),
   round1Pct: document.getElementById("round1Pct"),
   round1PctValue: document.getElementById("round1PctValue"),
   timeLimit1: document.getElementById("timeLimit1"),
@@ -112,6 +114,10 @@ els.round1Pct.addEventListener("input", () => {
   els.round1PctValue.textContent = `${els.round1Pct.value}%`;
 });
 
+els.trimAllowance.addEventListener("input", () => {
+  els.trimAllowanceValue.textContent = `${els.trimAllowance.value}mm`;
+});
+
 // A single solve can legitimately take over a minute (harder MIPs with the
 // min-batch-size constraint don't converge quickly), during which only one
 // or two status lines would otherwise change - which can look identical to
@@ -168,18 +174,20 @@ function parseOrders(text) {
 }
 
 // ---- pattern generation: all multisets of widths (count <= maxPieces, no
-// lower bound on count) summing to exactly motherWidth ----
-function generatePatterns(widths, motherWidth, maxPieces) {
+// lower bound on count) summing to between (motherWidth - trimAllowance)
+// and motherWidth, inclusive. trimAllowance=0 (the default) means "exactly
+// motherWidth" - zero trim loss, matching the original behavior. ----
+function generatePatterns(widths, motherWidth, maxPieces, trimAllowance) {
   const n = widths.length;
   if (n === 0) return [];
+  const minTotal = motherWidth - Math.max(0, trimAllowance || 0);
   const effectiveMaxPieces = Math.min(Math.floor(motherWidth / widths[0]), maxPieces);
   const patterns = [];
   const combo = [];
 
   function dfs(startIdx, count, total) {
-    if (total === motherWidth) {
+    if (count >= 1 && total >= minTotal && total <= motherWidth) {
       patterns.push(combo.slice());
-      return;
     }
     if (total > motherWidth || count >= effectiveMaxPieces) return;
     for (let i = startIdx; i < n; i++) {
@@ -840,6 +848,7 @@ async function runPipeline(mode) {
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
+    const trimAllowance = Math.min(600, Math.max(0, Math.round(Number(els.trimAllowance.value)) || 0));
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 8);
     const t2 = Math.max(1, Number(els.timeLimit2.value) || 30);
 
@@ -850,11 +859,11 @@ async function runPipeline(mode) {
 
     setStatus("產生所有可行刀路組合中...", "busy");
     await yieldToUI();
-    const patterns = generatePatterns(widths, motherWidth, maxPieces);
+    const patterns = generatePatterns(widths, motherWidth, maxPieces, trimAllowance);
 
     if (patterns.length === 0) {
       setStatus(
-        `在母卷寬度 ${motherWidth}mm、每卷最多 ${maxPieces} 刀的限制下，找不到任何「零修邊損耗」的組合，請調整參數。`,
+        `在母卷寬度 ${motherWidth}mm、每卷最多 ${maxPieces} 刀、容許修邊 ${trimAllowance}mm 的限制下，找不到任何可行組合，請調整參數。`,
         "error"
       );
       return;
@@ -872,7 +881,7 @@ async function runPipeline(mode) {
       els.warningsPanel.hidden = false;
       for (const w of uncovered) {
         const li = document.createElement("li");
-        li.textContent = `規格 ${w}mm（訂量 ${demand[String(w)]}）無法組成任何零修邊損耗且刀數 <= ${maxPieces} 的刀路，將完全無法排產。`;
+        li.textContent = `規格 ${w}mm（訂量 ${demand[String(w)]}）無法組成任何修邊損耗 <= ${trimAllowance}mm 且刀數 <= ${maxPieces} 的刀路，將完全無法排產。`;
         els.warningsList.appendChild(li);
       }
     }
@@ -969,7 +978,7 @@ async function runPipeline(mode) {
     if (remainingWidths.length > 0) {
       setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy");
       await yieldToUI();
-      const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces);
+      const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces, trimAllowance);
       if (round2Patterns.length > 0) {
         const round2PatternCounts = round2Patterns.map(patternToCounts);
         const round2PatternsFull = round2Patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
@@ -1048,10 +1057,11 @@ async function runPipeline(mode) {
       priorityStatus: `Round1：${round1WidthsDesc.length} 規格大到小組合（${round1RollsStatus}）`,
       rollsStatus: `Round2：${remainingWidths.length} 規格最高排抄率（${round2Status}）`,
     });
-    renderPlanTable(sequencedRows);
+    renderPlanTable(sequencedRows, motherWidth);
     renderFulfillTable(widths, demand, produced);
 
     window.__lastPlan = sequencedRows;
+    window.__lastMotherWidth = motherWidth;
     window.__lastFulfill = widths.map((w) => ({
       width: w,
       demand: demand[String(w)] || 0,
@@ -1117,12 +1127,14 @@ function renderSummary({
   }
 }
 
-function renderPlanTable(rows) {
+function renderPlanTable(rows, motherWidth) {
   els.planPanel.hidden = false;
   els.planTable.innerHTML = "";
   for (const row of rows) {
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    const waste = motherWidth - sum;
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.seq}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${row.items.reduce((s, w) => s + w, 0)}</td><td>${row.move}</td>`;
+    tr.innerHTML = `<td>${row.seq}</td><td>${row.count}</td><td>${row.items.join(" + ")}</td><td>${row.items.length}</td><td>${sum}</td><td>${waste}</td><td>${row.move}</td>`;
     els.planTable.appendChild(tr);
   }
 }
@@ -1205,9 +1217,11 @@ function downloadCSV(filename, rows) {
 
 els.downloadPlanBtn.addEventListener("click", () => {
   if (!window.__lastPlan) return;
-  const rows = [["生產順序", "母卷數量", "裁切規格(mm)", "刀數", "合計寬度(mm)", "與前一刀路刀具移動距離(mm)"]];
+  const motherWidth = window.__lastMotherWidth || 0;
+  const rows = [["生產順序", "母卷數量", "裁切規格(mm)", "刀數", "合計寬度(mm)", "修邊損耗(mm)", "與前一刀路刀具移動距離(mm)"]];
   for (const row of window.__lastPlan) {
-    rows.push([row.seq, row.count, row.items.join(" + "), row.items.length, row.items.reduce((s, w) => s + w, 0), row.move]);
+    const sum = row.items.reduce((s, w) => s + w, 0);
+    rows.push([row.seq, row.count, row.items.join(" + "), row.items.length, sum, motherWidth - sum, row.move]);
   }
   downloadCSV("cutting_plan.csv", rows);
 });
