@@ -70,6 +70,9 @@ const els = {
   tubeR2Len4: document.getElementById("tubeR2Len4"),
   tubeSummaryPanel: document.getElementById("tubeSummaryPanel"),
   tubeSummaryCards: document.getElementById("tubeSummaryCards"),
+  orderDetailPanel: document.getElementById("orderDetailPanel"),
+  orderDetailTable: document.getElementById("orderDetailTable").querySelector("tbody"),
+  downloadOrderDetailBtn: document.getElementById("downloadOrderDetailBtn"),
   tubeRound1Panel: document.getElementById("tubeRound1Panel"),
   tubeRound1Table: document.getElementById("tubeRound1Table").querySelector("tbody"),
   tubeRound2Panel: document.getElementById("tubeRound2Panel"),
@@ -158,21 +161,26 @@ function setStatus(msg, state) {
 // segments of it are needed - this IS the tube demand directly, no
 // slitting/cutting-plan stage in between. ----
 // Accepts two input shapes per line:
-//  - simple "寬度,數量" (or space-separated) pairs, e.g. "2100,149"
+//  - simple "寬度,數量" (or space-separated) pairs, e.g. "2100,149" - kept as
+//    an orderRow with blank order/customer/item metadata
 //  - the ERP order export format: 訂單編號,項次,客戶編號,客戶名稱,料號,門幅,需求量
 //    (>= 7 comma-separated columns), where 門幅/需求量 are columns 6 and 7
-//    (index 5/6) - other columns are ignored, and rows sharing the same
-//    門幅 are summed together same as the simple format.
+//    (index 5/6) - all columns are retained per-row in orderRows so later
+//    stages can trace a produced piece back to its originating order/item;
+//    demand/widths still aggregate by 門幅 (summed across all matching rows)
+//    for the solver, which only cares about totals per width.
 function parseOrders(text) {
   const widths = [];
   const demand = {};
+  const orderRows = [];
   const lines = text.split(/\r?\n/);
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
     const commaParts = line.split(/[,，]/).map((s) => s.trim()).filter((s) => s.length);
-    let w, q;
+    let w, q, orderNo, seq, custNo, custName, itemNo;
     if (commaParts.length >= 7) {
+      [orderNo, seq, custNo, custName, itemNo] = commaParts;
       w = Number(commaParts[5]);
       q = Number(commaParts[6]);
     } else {
@@ -180,15 +188,33 @@ function parseOrders(text) {
       if (parts.length < 2) continue;
       w = Number(parts[0]);
       q = Number(parts[1]);
+      orderNo = seq = custNo = custName = itemNo = "";
     }
     if (!Number.isFinite(w) || !Number.isFinite(q)) continue; // header or bad row
     if (w <= 0) continue;
     const key = String(w);
     if (!(key in demand)) widths.push(w);
-    demand[key] = (demand[key] || 0) + Math.max(0, Math.round(q));
+    const qty = Math.max(0, Math.round(q));
+    demand[key] = (demand[key] || 0) + qty;
+    orderRows.push({ orderNo, seq, custNo, custName, itemNo, width: w, qty });
   }
   widths.sort((a, b) => a - b);
-  return { widths, demand };
+  return { widths, demand, orderRows };
+}
+
+// Allocates a solved per-width production total back down to the individual
+// order rows that requested that width, first-come-first-served in the
+// original row order - see webapp/app.js for the full rationale.
+function allocateToOrderRows(orderRows, produced) {
+  const remaining = {};
+  for (const key in produced) remaining[key] = produced[key];
+  return orderRows.map((row) => {
+    const key = String(row.width);
+    const avail = remaining[key] || 0;
+    const fulfilled = Math.min(row.qty, avail);
+    remaining[key] = avail - fulfilled;
+    return { ...row, fulfilled, shortfall: row.qty - fulfilled };
+  });
 }
 
 function patternToCounts(pattern) {
@@ -775,11 +801,12 @@ function yieldToUI() {
 async function runPipeline() {
   els.runBtn.disabled = true;
   els.tubeSummaryPanel.hidden = true;
+  els.orderDetailPanel.hidden = true;
   els.tubeRound1Panel.hidden = true;
   els.tubeRound2Panel.hidden = true;
 
   try {
-    const { widths, demand } = parseOrders(els.ordersText.value);
+    const { widths, demand, orderRows } = parseOrders(els.ordersText.value);
     if (widths.length === 0) {
       setStatus("找不到有效的紙管需求資料，請確認格式為「寬度,數量」。", "idle");
       return;
@@ -791,6 +818,14 @@ async function runPipeline() {
     renderTubePlan(tube);
     window.__lastTube = tube;
 
+    const tubeProduced = {};
+    for (const w of tube.tubeWidths) {
+      tubeProduced[String(w)] = (tube.round1.produced[String(w)] || 0) + (tube.round2.produced[String(w)] || 0);
+    }
+    const orderDetailRows = allocateToOrderRows(orderRows, tubeProduced);
+    renderOrderDetailTable(orderDetailRows);
+    window.__lastOrderDetail = orderDetailRows;
+
     setStatus(
       `完成。共排產 ${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段，缺口 ${tube.shortfall} 段（Round1 ${tube.round1Tubes} 支，移動距離 ${tube.round1Movement}mm；Round2 ${tube.round2Tubes} 支，移動距離 ${tube.round2Movement}mm）。`,
       tube.shortfall > 0 ? "warn" : "ok"
@@ -800,6 +835,26 @@ async function runPipeline() {
     setStatus("發生錯誤：" + (err && err.message ? err.message : String(err)), "error");
   } finally {
     els.runBtn.disabled = false;
+  }
+}
+
+function renderOrderDetailTable(rows) {
+  els.orderDetailPanel.hidden = rows.length === 0;
+  els.orderDetailTable.innerHTML = "";
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    for (const val of [row.orderNo, row.seq, row.custNo, row.custName, row.itemNo, row.width, row.qty, row.fulfilled, row.shortfall]) {
+      const td = document.createElement("td");
+      td.textContent = val;
+      tr.appendChild(td);
+    }
+    const statusTd = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = "badge " + (row.shortfall > 0 ? "short" : "ok");
+    badge.textContent = row.shortfall > 0 ? "缺口" : "已滿足";
+    statusTd.appendChild(badge);
+    tr.appendChild(statusTd);
+    els.orderDetailTable.appendChild(tr);
   }
 }
 
@@ -882,6 +937,15 @@ els.downloadTube2Btn.addEventListener("click", () => {
     rows.push([row.seq, row.stockLength, row.count, row.items.join(" + "), row.items.length, sum, row.stockLength - sum, row.move]);
   }
   downloadCSV("tube_plan_round2.csv", rows);
+});
+
+els.downloadOrderDetailBtn.addEventListener("click", () => {
+  if (!window.__lastOrderDetail) return;
+  const rows = [["訂單編號", "項次", "客戶編號", "客戶名稱", "料號", "門幅(mm)", "需求量", "已排產", "差額"]];
+  for (const r of window.__lastOrderDetail) {
+    rows.push([r.orderNo, r.seq, r.custNo, r.custName, r.itemNo, r.width, r.qty, r.fulfilled, r.shortfall]);
+  }
+  downloadCSV("order_item_detail.csv", rows);
 });
 
 els.runBtn.addEventListener("click", runPipeline);
