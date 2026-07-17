@@ -174,25 +174,31 @@ function parseOrders(text) {
 }
 
 // ---- pattern generation: all multisets of widths (count <= maxPieces, no
-// lower bound on count) summing to between (motherWidth - trimAllowance)
-// and motherWidth, inclusive. trimAllowance=0 (the default) means "exactly
-// motherWidth" - zero trim loss, matching the original behavior. ----
+// lower bound on count) summing to within trimAllowance of motherWidth.
+// trimAllowance=0 (the default) means "exactly motherWidth" - zero trim
+// loss, matching the original behavior. A positive trimAllowance permits
+// undershoot (total as low as motherWidth - trimAllowance, i.e. up to that
+// much trim waste). A negative trimAllowance instead permits overshoot
+// (total as high as motherWidth + |trimAllowance|), for when the mother
+// roll's actual physical width runs a bit over its nominal spec. ----
 function generatePatterns(widths, motherWidth, maxPieces, trimAllowance) {
   const n = widths.length;
   if (n === 0) return [];
-  const minTotal = motherWidth - Math.max(0, trimAllowance || 0);
-  const effectiveMaxPieces = Math.min(Math.floor(motherWidth / widths[0]), maxPieces);
+  const allowance = trimAllowance || 0;
+  const minTotal = motherWidth - Math.max(0, allowance);
+  const maxTotal = motherWidth + Math.max(0, -allowance);
+  const effectiveMaxPieces = Math.min(Math.floor(maxTotal / widths[0]), maxPieces);
   const patterns = [];
   const combo = [];
 
   function dfs(startIdx, count, total) {
-    if (count >= 1 && total >= minTotal && total <= motherWidth) {
+    if (count >= 1 && total >= minTotal && total <= maxTotal) {
       patterns.push(combo.slice());
     }
-    if (total > motherWidth || count >= effectiveMaxPieces) return;
+    if (total > maxTotal || count >= effectiveMaxPieces) return;
     for (let i = startIdx; i < n; i++) {
       const w = widths[i];
-      if (total + w > motherWidth) break; // sorted ascending, no smaller options later
+      if (total + w > maxTotal) break; // sorted ascending, no smaller options later
       combo.push(w);
       dfs(i, count + 1, total + w);
       combo.pop();
@@ -848,7 +854,7 @@ async function runPipeline(mode) {
 
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
-    const trimAllowance = Math.min(600, Math.max(0, Math.round(Number(els.trimAllowance.value)) || 0));
+    const trimAllowance = Math.min(600, Math.max(-50, Math.round(Number(els.trimAllowance.value)) || 0));
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 8);
     const t2 = Math.max(1, Number(els.timeLimit2.value) || 30);
 
