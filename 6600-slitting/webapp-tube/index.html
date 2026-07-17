@@ -108,11 +108,11 @@
         <h2>訂單／項次對應明細</h2>
         <button id="downloadOrderDetailBtn" type="button" class="ghost">下載 CSV</button>
       </div>
-      <p class="hint">依匯入資料的原始列順序，把每個規格的已排產段數依序分配回各筆訂單項次（先到先分配）。若匯入資料是簡易「寬度,數量」格式，訂單/客戶/料號欄位會留空。</p>
+      <p class="hint">依匯入資料的原始列順序，把每個規格的已排產段數依序分配回各筆訂單項次（先到先分配），並標註其對應到 Round1/Round2 生產計畫中的第幾個生產順序（如 R1-5，若跨越多個順序則以逗號列出）。若匯入資料是簡易「寬度,數量」格式，訂單/客戶/料號欄位會留空。</p>
       <div class="table-wrap">
         <table id="orderDetailTable">
           <thead>
-            <tr><th>訂單編號</th><th>項次</th><th>客戶編號</th><th>客戶名稱</th><th>料號</th><th>門幅 (mm)</th><th>需求量</th><th>已排產</th><th>差額</th><th>狀態</th></tr>
+            <tr><th>訂單編號</th><th>項次</th><th>客戶編號</th><th>客戶名稱</th><th>料號</th><th>門幅 (mm)</th><th>需求量</th><th>已排產</th><th>裁切順序</th><th>差額</th><th>狀態</th></tr>
           </thead>
           <tbody></tbody>
         </table>

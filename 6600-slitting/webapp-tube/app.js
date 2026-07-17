@@ -202,18 +202,65 @@ function parseOrders(text) {
   return { widths, demand, orderRows };
 }
 
+// Breaks a sequenced production plan (rows of {seq, count, items}, as
+// rendered in the Round1/Round2 tables) into a per-width FIFO queue of
+// {label, qty} chunks - see webapp/app.js for the full rationale.
+function buildSeqQueues(sequencedRows, labelFn) {
+  const queues = {};
+  for (const row of sequencedRows) {
+    const label = labelFn(row);
+    const counts = patternToCounts(row.items);
+    for (const key in counts) {
+      const qty = row.count * counts[key];
+      if (!queues[key]) queues[key] = [];
+      queues[key].push({ label, qty });
+    }
+  }
+  return queues;
+}
+
+// Concatenates two per-width seq-queue sets (Round1 chunks followed by
+// Round2 chunks) into one, preserving chunk order within each width.
+function mergeSeqQueues(a, b) {
+  const merged = {};
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    merged[key] = [...(a[key] || []), ...(b[key] || [])];
+  }
+  return merged;
+}
+
 // Allocates a solved per-width production total back down to the individual
 // order rows that requested that width, first-come-first-served in the
-// original row order - see webapp/app.js for the full rationale.
-function allocateToOrderRows(orderRows, produced) {
+// original row order - see webapp/app.js for the full rationale. If
+// seqQueues is given, also reports which cutting-sequence position(s) each
+// order row was actually cut at.
+function allocateToOrderRows(orderRows, produced, seqQueues) {
   const remaining = {};
   for (const key in produced) remaining[key] = produced[key];
+  const queues = {};
+  if (seqQueues) {
+    for (const key in seqQueues) queues[key] = seqQueues[key].map((c) => ({ ...c }));
+  }
   return orderRows.map((row) => {
     const key = String(row.width);
     const avail = remaining[key] || 0;
     const fulfilled = Math.min(row.qty, avail);
     remaining[key] = avail - fulfilled;
-    return { ...row, fulfilled, shortfall: row.qty - fulfilled };
+
+    const cutSeqLabels = [];
+    if (queues[key]) {
+      let need = fulfilled;
+      while (need > 0 && queues[key].length > 0) {
+        const chunk = queues[key][0];
+        const take = Math.min(need, chunk.qty);
+        if (take > 0 && !cutSeqLabels.includes(chunk.label)) cutSeqLabels.push(chunk.label);
+        chunk.qty -= take;
+        need -= take;
+        if (chunk.qty <= 0) queues[key].shift();
+      }
+    }
+
+    return { ...row, fulfilled, shortfall: row.qty - fulfilled, cutSeq: cutSeqLabels.join(", ") };
   });
 }
 
@@ -822,7 +869,11 @@ async function runPipeline() {
     for (const w of tube.tubeWidths) {
       tubeProduced[String(w)] = (tube.round1.produced[String(w)] || 0) + (tube.round2.produced[String(w)] || 0);
     }
-    const orderDetailRows = allocateToOrderRows(orderRows, tubeProduced);
+    const tubeCutSeqQueues = mergeSeqQueues(
+      buildSeqQueues(tube.round1SequencedRows, (row) => `R1-${row.seq}`),
+      buildSeqQueues(tube.round2SequencedRows, (row) => `R2-${row.seq}`)
+    );
+    const orderDetailRows = allocateToOrderRows(orderRows, tubeProduced, tubeCutSeqQueues);
     renderOrderDetailTable(orderDetailRows);
     window.__lastOrderDetail = orderDetailRows;
 
@@ -843,7 +894,19 @@ function renderOrderDetailTable(rows) {
   els.orderDetailTable.innerHTML = "";
   for (const row of rows) {
     const tr = document.createElement("tr");
-    for (const val of [row.orderNo, row.seq, row.custNo, row.custName, row.itemNo, row.width, row.qty, row.fulfilled, row.shortfall]) {
+    const cells = [
+      row.orderNo,
+      row.seq,
+      row.custNo,
+      row.custName,
+      row.itemNo,
+      row.width,
+      row.qty,
+      row.fulfilled,
+      row.cutSeq || "-",
+      row.shortfall,
+    ];
+    for (const val of cells) {
       const td = document.createElement("td");
       td.textContent = val;
       tr.appendChild(td);
@@ -941,9 +1004,9 @@ els.downloadTube2Btn.addEventListener("click", () => {
 
 els.downloadOrderDetailBtn.addEventListener("click", () => {
   if (!window.__lastOrderDetail) return;
-  const rows = [["訂單編號", "項次", "客戶編號", "客戶名稱", "料號", "門幅(mm)", "需求量", "已排產", "差額"]];
+  const rows = [["訂單編號", "項次", "客戶編號", "客戶名稱", "料號", "門幅(mm)", "需求量", "已排產", "裁切順序", "差額"]];
   for (const r of window.__lastOrderDetail) {
-    rows.push([r.orderNo, r.seq, r.custNo, r.custName, r.itemNo, r.width, r.qty, r.fulfilled, r.shortfall]);
+    rows.push([r.orderNo, r.seq, r.custNo, r.custName, r.itemNo, r.width, r.qty, r.fulfilled, r.cutSeq || "-", r.shortfall]);
   }
   downloadCSV("order_item_detail.csv", rows);
 });
