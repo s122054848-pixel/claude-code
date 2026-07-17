@@ -230,44 +230,57 @@ function mergeSeqQueues(a, b) {
   return merged;
 }
 
+// Consumes `need` units of `widthKey` from the front of a per-width queue
+// (mutating it in place) and returns the ordered list of distinct sequence
+// labels that supplied them - a row can span more than one label if its
+// demand crosses a pattern-count boundary.
+function consumeSeqQueue(queues, widthKey, need) {
+  const labels = [];
+  const queue = queues[widthKey];
+  if (!queue) return labels;
+  while (need > 0 && queue.length > 0) {
+    const chunk = queue[0];
+    const take = Math.min(need, chunk.qty);
+    if (take > 0 && !labels.includes(chunk.label)) labels.push(chunk.label);
+    chunk.qty -= take;
+    need -= take;
+    if (chunk.qty <= 0) queue.shift();
+  }
+  return labels;
+}
+
 // Allocates a solved per-width production total back down to the individual
 // order rows that requested that width, first-come-first-served in the
 // original row order: each row gets as much of the remaining per-width
 // supply as it needs (up to its own qty), then the next row for that width
 // draws from whatever's left. Lets the order/item detail table show exactly
 // which orders got fulfilled (and by how much) from an aggregate production
-// number that the solver only tracks per-width, not per-order. If seqQueues
-// is given, also consumes from it in step with the allocation so each order
-// row can report which cutting-sequence position(s) it was actually cut at
-// (a row can span more than one if its demand crosses a pattern-count
-// boundary).
-function allocateToOrderRows(orderRows, produced, seqQueues) {
+// number that the solver only tracks per-width, not per-order.
+// seqQueueSets (optional): an array of { field, queues } - e.g. the main
+// 6600 plan's sequence AND (in the full pipeline) the tube plan's Round1/2
+// sequence both apply to the same physical units, so each set is walked
+// independently in step with the same per-row fulfilled amount, and its
+// result stored under row[field] (comma-joined labels, or "" if that stage
+// didn't touch this width at all).
+function allocateToOrderRows(orderRows, produced, seqQueueSets) {
   const remaining = {};
   for (const key in produced) remaining[key] = produced[key];
-  const queues = {};
-  if (seqQueues) {
-    for (const key in seqQueues) queues[key] = seqQueues[key].map((c) => ({ ...c }));
-  }
+  const sets = (seqQueueSets || []).map((s) => {
+    const queues = {};
+    for (const key in s.queues) queues[key] = s.queues[key].map((c) => ({ ...c }));
+    return { field: s.field, queues };
+  });
   return orderRows.map((row) => {
     const key = String(row.width);
     const avail = remaining[key] || 0;
     const fulfilled = Math.min(row.qty, avail);
     remaining[key] = avail - fulfilled;
 
-    const cutSeqLabels = [];
-    if (queues[key]) {
-      let need = fulfilled;
-      while (need > 0 && queues[key].length > 0) {
-        const chunk = queues[key][0];
-        const take = Math.min(need, chunk.qty);
-        if (take > 0 && !cutSeqLabels.includes(chunk.label)) cutSeqLabels.push(chunk.label);
-        chunk.qty -= take;
-        need -= take;
-        if (chunk.qty <= 0) queues[key].shift();
-      }
+    const result = { ...row, fulfilled, shortfall: row.qty - fulfilled };
+    for (const s of sets) {
+      result[s.field] = consumeSeqQueue(s.queues, key, fulfilled).join(", ");
     }
-
-    return { ...row, fulfilled, shortfall: row.qty - fulfilled, cutSeq: cutSeqLabels.join(", ") };
+    return result;
   });
 }
 
@@ -953,7 +966,9 @@ async function runPipeline(mode) {
         buildSeqQueues(tube.round1SequencedRows, (row) => `R1-${row.seq}`),
         buildSeqQueues(tube.round2SequencedRows, (row) => `R2-${row.seq}`)
       );
-      const orderDetailRows = allocateToOrderRows(orderRows, tubeProduced, tubeCutSeqQueues);
+      const orderDetailRows = allocateToOrderRows(orderRows, tubeProduced, [
+        { field: "cutSeqTube", queues: tubeCutSeqQueues },
+      ]);
       renderOrderDetailTable(orderDetailRows);
       window.__lastOrderDetail = orderDetailRows;
 
@@ -1186,10 +1201,9 @@ async function runPipeline(mode) {
       produced: produced[String(w)] || 0,
     }));
 
-    const cutSeqQueues = buildSeqQueues(sequencedRows, (row) => String(row.seq));
-    const orderDetailRows = allocateToOrderRows(orderRows, produced, cutSeqQueues);
-    renderOrderDetailTable(orderDetailRows);
-    window.__lastOrderDetail = orderDetailRows;
+    const seqQueueSets = [
+      { field: "cutSeq6600", queues: buildSeqQueues(sequencedRows, (row) => String(row.seq)) },
+    ];
 
     let tubeSummaryMsg = "";
     if (mode === "full") {
@@ -1200,9 +1214,20 @@ async function runPipeline(mode) {
       window.__lastTube = tube;
       tubeSummaryMsg = `｜紙管：${tube.round1Total + tube.round2Total}/${tube.totalDemand} 段（Round1 ${tube.round1Tubes} 支/移動 ${tube.round1Movement}mm、Round2 ${tube.round2Tubes} 支/移動 ${tube.round2Movement}mm）`;
       if (tube.shortfall > 0) tubeSummaryMsg += `，缺口 ${tube.shortfall} 段`;
+      seqQueueSets.push({
+        field: "cutSeqTube",
+        queues: mergeSeqQueues(
+          buildSeqQueues(tube.round1SequencedRows, (row) => `R1-${row.seq}`),
+          buildSeqQueues(tube.round2SequencedRows, (row) => `R2-${row.seq}`)
+        ),
+      });
     } else {
       window.__lastTube = null;
     }
+
+    const orderDetailRows = allocateToOrderRows(orderRows, produced, seqQueueSets);
+    renderOrderDetailTable(orderDetailRows);
+    window.__lastOrderDetail = orderDetailRows;
 
     setStatus(
       `完成。共排產 ${totalProduced}/${totalDemand} 件，缺口 ${totalDemand - totalProduced} 件，使用 ${totalRolls} 支母卷，${sequencedRows.length} 種刀路，建議生產順序總刀具移動距離 ${totalCost}mm${tubeSummaryMsg}。`,
@@ -1292,7 +1317,8 @@ function renderOrderDetailTable(rows) {
       row.width,
       row.qty,
       row.fulfilled,
-      row.cutSeq || "-",
+      row.cutSeq6600 || "-",
+      row.cutSeqTube || "-",
       row.shortfall,
     ];
     for (const val of cells) {
@@ -1392,9 +1418,9 @@ els.downloadFulfillBtn.addEventListener("click", () => {
 
 els.downloadOrderDetailBtn.addEventListener("click", () => {
   if (!window.__lastOrderDetail) return;
-  const rows = [["訂單編號", "項次", "客戶編號", "客戶名稱", "料號", "門幅(mm)", "需求量", "已排產", "裁切順序", "差額"]];
+  const rows = [["訂單編號", "項次", "客戶編號", "客戶名稱", "料號", "門幅(mm)", "需求量", "已排產", "6600裁切順序", "紙管裁切順序", "差額"]];
   for (const r of window.__lastOrderDetail) {
-    rows.push([r.orderNo, r.seq, r.custNo, r.custName, r.itemNo, r.width, r.qty, r.fulfilled, r.cutSeq || "-", r.shortfall]);
+    rows.push([r.orderNo, r.seq, r.custNo, r.custName, r.itemNo, r.width, r.qty, r.fulfilled, r.cutSeq6600 || "-", r.cutSeqTube || "-", r.shortfall]);
   }
   downloadCSV("order_item_detail.csv", rows);
 });
