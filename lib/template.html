@@ -1,0 +1,673 @@
+<meta charset="utf-8">
+<title>2026-07-01 排車與3D裝載模擬 — 龍潭廠</title>
+<style>
+  :root {
+    --bg: #f1eee7;
+    --surface: #ffffff;
+    --surface-2: #e9e4d8;
+    --ink: #23262a;
+    --muted: #6e7168;
+    --line: #dad5c8;
+    --accent: #2e5f73;
+    --accent-soft: #dde8ea;
+    --accent-2: #b98a55;
+    --good: #3f8f5f;
+    --warn: #c98a2b;
+    --critical: #c1443b;
+    --radius: 6px;
+    --font-display: "Archivo Narrow", "Roboto Condensed", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    --font-body: "Noto Sans TC", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Noto Sans TC", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181c;
+      --surface: #1c2126;
+      --surface-2: #20262c;
+      --ink: #e7e4dc;
+      --muted: #9ba098;
+      --line: #333a40;
+      --accent: #6fb0c8;
+      --accent-soft: #22333a;
+      --accent-2: #c89a66;
+      --good: #5cbb80;
+      --warn: #e0a94d;
+      --critical: #e0685d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181c; --surface: #1c2126; --surface-2: #20262c; --ink: #e7e4dc;
+    --muted: #9ba098; --line: #333a40; --accent: #6fb0c8; --accent-soft: #22333a;
+    --accent-2: #c89a66; --good: #5cbb80; --warn: #e0a94d; --critical: #e0685d;
+  }
+  :root[data-theme="light"] {
+    --bg: #f1eee7; --surface: #ffffff; --surface-2: #e9e4d8; --ink: #23262a;
+    --muted: #6e7168; --line: #dad5c8; --accent: #2e5f73; --accent-soft: #dde8ea;
+    --accent-2: #b98a55; --good: #3f8f5f; --warn: #c98a2b; --critical: #c1443b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  header.topbar {
+    padding: 18px 24px 16px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--surface);
+  }
+  .title-block h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.01em;
+    margin: 0 0 2px;
+    text-wrap: balance;
+  }
+  .title-block .sub {
+    color: var(--muted);
+    font-size: 12.5px;
+    letter-spacing: 0.02em;
+  }
+  .stat-row { display: flex; gap: 22px; flex-wrap: wrap; }
+  .stat {
+    display: flex; flex-direction: column; gap: 2px; min-width: 74px;
+  }
+  .stat .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .stat .lbl {
+    font-size: 11px; color: var(--muted); letter-spacing: 0.04em;
+  }
+
+  .body-grid {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+
+  aside.truck-list {
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    overflow-y: auto;
+    max-height: calc(100vh - 88px);
+  }
+  aside.truck-list .list-head {
+    padding: 12px 16px 8px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    text-transform: uppercase;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+  }
+  .truck-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 9px 16px;
+    border: none;
+    border-left: 3px solid transparent;
+    background: none;
+    cursor: pointer;
+    font-family: var(--font-body);
+    color: var(--ink);
+    font-size: 13px;
+  }
+  .truck-item:hover { background: var(--accent-soft); }
+  .truck-item.active {
+    background: var(--accent-soft);
+    border-left-color: var(--accent);
+  }
+  .truck-item .row1 {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  }
+  .truck-item .row1 .no { font-weight: 600; }
+  .truck-item .row1 .stacks { color: var(--muted); font-size: 11.5px; }
+  .util-bar {
+    margin-top: 5px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .util-bar > i {
+    display: block; height: 100%; background: var(--accent);
+    border-radius: 3px;
+  }
+  .util-bar.low > i { background: var(--warn); }
+
+  main.viewport {
+    padding: 20px 26px 30px;
+    overflow-y: auto;
+    max-height: calc(100vh - 88px);
+  }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px; flex-wrap: wrap; gap: 10px;
+  }
+  .panel-head h2 {
+    font-family: var(--font-display);
+    font-size: 17px; margin: 0; font-weight: 700;
+  }
+  .util-pill {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 12px; padding: 3px 10px; border-radius: 100px;
+    background: var(--surface-2); color: var(--muted);
+  }
+  .util-pill.good { color: var(--good); }
+  .util-pill.warn { color: var(--warn); }
+
+  .canvas-wrap {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 6px;
+  }
+  canvas#sim, canvas#mapCanvas {
+    display: block; width: 100%; height: 400px; border-radius: 4px;
+  }
+
+  .dual-panel {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .panel-label {
+    font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 6px; font-weight: 600;
+  }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 16px;
+    padding: 10px 4px 2px; font-size: 11.5px; color: var(--muted);
+  }
+  .legend .chip { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+  .map-stats {
+    display: flex; gap: 20px; padding: 10px 4px 2px; flex-wrap: wrap;
+  }
+  .map-stats .stat2 { display: flex; flex-direction: column; gap: 1px; }
+  .map-stats .stat2 .num {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 17px; font-weight: 600; color: var(--accent-2);
+  }
+  .map-stats .stat2 .lbl { font-size: 11px; color: var(--muted); }
+  .map-stops {
+    font-size: 11.5px; color: var(--muted); padding: 2px 4px 0;
+    display: flex; flex-wrap: wrap; gap: 6px 4px;
+  }
+  .map-stops .stop-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--surface-2); border-radius: 100px; padding: 2px 9px 2px 6px;
+  }
+  .map-stops .stop-chip .n {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 50%; background: var(--accent-2);
+    color: var(--surface); font-size: 9.5px; font-weight: 700; flex: none;
+  }
+
+  @media (max-width: 900px) {
+    .dual-panel { grid-template-columns: 1fr; }
+  }
+
+  table.dispatch {
+    width: 100%; border-collapse: collapse; margin-top: 18px;
+    font-size: 12.5px;
+  }
+  table.dispatch caption {
+    text-align: left; font-family: var(--font-display); font-weight: 700;
+    font-size: 15px; margin-bottom: 8px; caption-side: top;
+  }
+  table.dispatch th {
+    text-align: left; font-size: 11px; letter-spacing: 0.04em;
+    color: var(--muted); font-weight: 600; text-transform: uppercase;
+    padding: 6px 10px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: var(--surface);
+  }
+  table.dispatch td {
+    padding: 7px 10px; border-bottom: 1px solid var(--line);
+  }
+  table.dispatch tbody tr:hover { background: var(--surface-2); }
+  table.dispatch td.num, table.dispatch th.num {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right;
+  }
+  .table-scroll { overflow-x: auto; }
+
+  .tooltip {
+    position: fixed; pointer-events: none; z-index: 20;
+    background: var(--ink); color: var(--bg);
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 6px 9px; border-radius: 4px; line-height: 1.4;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    opacity: 0; transition: opacity .08s ease;
+    max-width: 240px;
+  }
+  .tooltip.show { opacity: 1; }
+
+  .empty-note { color: var(--muted); font-size: 12.5px; padding: 20px 0; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+
+  @media (max-width: 780px) {
+    .body-grid { grid-template-columns: 1fr; }
+    aside.truck-list { max-height: 220px; border-right: none; border-bottom: 1px solid var(--line); }
+    main.viewport { max-height: none; }
+  }
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <div class="title-block">
+      <h1>排車單 &amp; 3D裝載模擬</h1>
+      <div class="sub">龍潭廠出貨排車 · 資料日期 <span id="metaDate">—</span> · 車台內尺寸 <span id="metaTruck">—</span></div>
+    </div>
+    <div class="stat-row" id="statRow"></div>
+  </header>
+
+  <div class="body-grid">
+    <aside class="truck-list" id="truckList">
+      <div class="list-head">車次列表(依樓面使用率)</div>
+    </aside>
+
+    <main class="viewport">
+      <div class="panel-head">
+        <div>
+          <h2 id="truckTitle">車次 1</h2>
+          <div class="sub" id="truckCust" style="color:var(--muted);font-size:12.5px;margin-top:2px;"></div>
+        </div>
+        <span class="util-pill" id="utilPill">樓面使用率 —</span>
+      </div>
+
+      <div class="dual-panel">
+        <div>
+          <div class="panel-label">3D裝載模擬</div>
+          <div class="canvas-wrap">
+            <canvas id="sim"></canvas>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div>
+          <div class="panel-label">送貨客戶地理位置</div>
+          <div class="canvas-wrap">
+            <canvas id="mapCanvas"></canvas>
+          </div>
+          <div class="map-stats" id="mapStats"></div>
+        </div>
+      </div>
+
+      <div class="table-scroll">
+        <table class="dispatch" id="dispatchTable">
+          <caption>排車單明細</caption>
+          <thead>
+            <tr>
+              <th>送貨客戶</th><th>訂單號</th><th>品號</th>
+              <th class="num">箱數</th><th class="num">寬mm</th><th class="num">長mm</th><th class="num">厚mm</th><th class="num">堆疊數</th>
+            </tr>
+          </thead>
+          <tbody id="dispatchBody"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const DATA = /*__EMBED_DATA__*/{}/*__END_EMBED_DATA__*/;
+
+const state = { current: 0 };
+
+function fmtInt(n) { return Number(n).toLocaleString('en-US'); }
+
+function paletteColor(i, n, dark) {
+  const hue = (i * (360 / n)) % 360;
+  const sat = 52;
+  const light = dark ? 58 : 46;
+  return `hsl(${hue.toFixed(1)} ${sat}% ${light}%)`;
+}
+
+function isDark() {
+  const t = document.documentElement.getAttribute('data-theme');
+  if (t === 'dark') return true;
+  if (t === 'light') return false;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function buildStatRow() {
+  const m = DATA.meta;
+  const stats = [
+    ['訂單數', fmtInt(m.totalOrders)],
+    ['送貨客戶數', fmtInt(m.totalCustomers)],
+    ['總箱數', fmtInt(m.totalBoxes)],
+    ['需求車次', fmtInt(m.totalTrucks)],
+  ];
+  const row = document.getElementById('statRow');
+  row.innerHTML = stats.map(([lbl, num]) =>
+    `<div class="stat"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`
+  ).join('');
+  document.getElementById('metaDate').textContent = m.date;
+  const d = DATA.truckDims;
+  document.getElementById('metaTruck').textContent = `${d.L}×${d.W}×${d.H}mm`;
+}
+
+function buildTruckList() {
+  const list = document.getElementById('truckList');
+  DATA.trucks.forEach((t, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'truck-item' + (idx === state.current ? ' active' : '');
+    btn.dataset.idx = idx;
+    const low = t.util < 50 ? ' low' : '';
+    btn.innerHTML = `
+      <div class="row1"><span class="no">車次 ${t.n}</span><span class="stacks">${t.stacks} 堆</span></div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.primaryCust}</div>
+      <div class="util-bar${low}"><i style="width:${t.util}%"></i></div>
+    `;
+    btn.addEventListener('click', () => selectTruck(idx));
+    list.appendChild(btn);
+  });
+}
+
+function selectTruck(idx) {
+  state.current = idx;
+  document.querySelectorAll('.truck-item').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+  render();
+}
+
+function render() {
+  const t = DATA.trucks[state.current];
+  document.getElementById('truckTitle').textContent = `車次 ${t.n}`;
+  document.getElementById('truckCust').textContent = `送貨客戶:${t.primaryCust}`;
+  const pill = document.getElementById('utilPill');
+  pill.textContent = `樓面使用率 ${t.util}%`;
+  pill.className = 'util-pill ' + (t.util >= 75 ? 'good' : (t.util < 50 ? 'warn' : ''));
+
+  renderLegend(t);
+  renderCanvas(t);
+  renderMap(t);
+  renderTable(t);
+}
+
+function renderMapStats(t) {
+  const el = document.getElementById('mapStats');
+  const n = t.stops.length;
+  el.innerHTML = `
+    <div class="stat2"><div class="num">${t.distanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km</div><div class="lbl">送貨距離(依站序直線加總)</div></div>
+    <div class="stat2"><div class="num">${n}</div><div class="lbl">送貨站數</div></div>
+  `;
+  const stopsEl = document.createElement('div');
+  stopsEl.className = 'map-stops';
+  stopsEl.innerHTML = t.stops.map((s, i) =>
+    `<span class="stop-chip"><span class="n">${i + 1}</span>${s.name}</span>`
+  ).join('');
+  const existing = el.parentElement.querySelector('.map-stops');
+  if (existing) existing.remove();
+  el.parentElement.appendChild(stopsEl);
+}
+
+function renderMap(t) {
+  renderMapStats(t);
+  const canvas = document.getElementById('mapCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const cssH = 400;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const dark = isDark();
+  const dim = dark ? 'rgba(231,228,220,0.22)' : 'rgba(35,38,42,0.18)';
+  const gridColor = dark ? '#2a3036' : '#e4e0d4';
+  const routeColor = dark ? '#c89a66' : '#b98a55';
+
+  const pts = DATA.allCustPoints;
+  if (!pts.length) return;
+  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const margin = 26;
+  const spanLat = Math.max(maxLat - minLat, 0.001), spanLng = Math.max(maxLng - minLng, 0.001);
+  const scale = Math.min((cssW - margin*2) / spanLng, (cssH - margin*2) / spanLat);
+  const offX = margin + ((cssW - margin*2) - spanLng*scale) / 2;
+  const offY = margin + ((cssH - margin*2) - spanLat*scale) / 2;
+
+  function toXY(lat, lng) {
+    const x = (lng - minLng) * scale + offX;
+    const y = (maxLat - lat) * scale + offY; // north = up
+    return [x, y];
+  }
+
+  // faint reference grid
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const gy = margin + (cssH - margin*2) * i / 4;
+    ctx.beginPath(); ctx.moveTo(margin, gy); ctx.lineTo(cssW - margin, gy); ctx.stroke();
+  }
+
+  // all customers, faint
+  pts.forEach(p => {
+    const [x, y] = toXY(p.lat, p.lng);
+    ctx.beginPath();
+    ctx.arc(x, y, 2.4, 0, Math.PI * 2);
+    ctx.fillStyle = dim;
+    ctx.fill();
+  });
+
+  // this truck's route, highlighted + connected in stop order
+  const stopXY = t.stops.map(s => toXY(s.lat, s.lng));
+  if (stopXY.length > 1) {
+    ctx.beginPath();
+    stopXY.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+    ctx.strokeStyle = routeColor;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.stroke();
+  }
+  stopXY.forEach(([x, y], i) => {
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = routeColor;
+    ctx.fill();
+    ctx.strokeStyle = dark ? '#14181c' : '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = dark ? '#14181c' : '#fff';
+    ctx.font = '9px var(--font-mono)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), x, y + 0.5);
+  });
+}
+
+function renderLegend(t) {
+  const custIdx = [...new Set(t.items.map(it => it.c))].sort((a, b) => a - b);
+  const dark = isDark();
+  const legend = document.getElementById('legend');
+  legend.innerHTML = custIdx.map(ci => {
+    const color = paletteColor(ci, DATA.customers.length, dark);
+    return `<span class="chip"><span class="swatch" style="background:${color}"></span>${DATA.customers[ci]}</span>`;
+  }).join('');
+}
+
+function renderTable(t) {
+  const body = document.getElementById('dispatchBody');
+  const rows = [...t.rows].sort((a, b) => a.cust_code.localeCompare(b.cust_code) || b.boxes - a.boxes);
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.cust_code} ${r.cust_name}</td>
+      <td>${r.order_no}</td>
+      <td>${r.item}</td>
+      <td class="num">${fmtInt(r.boxes)}</td>
+      <td class="num">${r.w}</td>
+      <td class="num">${r.l}</td>
+      <td class="num">${r.t}</td>
+      <td class="num">${r.stacks}</td>
+    </tr>
+  `).join('');
+}
+
+// ---- Isometric truck + stack renderer ----
+function project(x, y, z) {
+  // x: along length (0..L), y: height (0..H), z: along width (0..W)
+  const cos30 = Math.cos(Math.PI / 6), sin30 = Math.sin(Math.PI / 6);
+  const sx = (x - z) * cos30;
+  const sy = (x + z) * sin30 - y;
+  return [sx, sy];
+}
+
+function renderCanvas(t) {
+  const canvas = document.getElementById('sim');
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const cssH = 460;
+  canvas.width = cssW * dpr;
+  canvas.height = cssH * dpr;
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const dark = isDark();
+  const lineColor = dark ? '#333a40' : '#dad5c8';
+  const ink = dark ? '#e7e4dc' : '#23262a';
+
+  const { L, W, H } = DATA.truckDims;
+
+  // compute projected bounding box of the truck to fit canvas
+  const corners = [
+    [0,0,0],[L,0,0],[0,0,W],[L,0,W],
+    [0,H,0],[L,H,0],[0,H,W],[L,H,W]
+  ].map(([x,y,z]) => project(x,y,z));
+  const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const margin = 36;
+  const scale = Math.min((cssW - margin*2) / (maxX - minX), (cssH - margin*2) / (maxY - minY));
+  const offX = margin - minX*scale + ((cssW - margin*2) - (maxX-minX)*scale)/2;
+  const offY = margin - minY*scale + ((cssH - margin*2) - (maxY-minY)*scale)/2;
+
+  function P(x,y,z) {
+    const [sx, sy] = project(x,y,z);
+    return [sx*scale + offX, sy*scale + offY];
+  }
+
+  function poly(pts, fill, stroke, alpha) {
+    ctx.beginPath();
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));
+    ctx.closePath();
+    if (fill) { ctx.globalAlpha = alpha ?? 1; ctx.fillStyle = fill; ctx.fill(); ctx.globalAlpha = 1; }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+  }
+
+  // draw truck floor (wireframe) first
+  poly([P(0,0,0), P(L,0,0), P(L,0,W), P(0,0,W)], null, lineColor);
+
+  // sort items back-to-front for painter's algorithm (by x+z ascending, then y)
+  const items = [...t.items].sort((a, b) => {
+    const da = (a.x + a.dx/2) + (a.y + a.dy/2);
+    const db = (b.x + b.dx/2) + (b.y + b.dy/2);
+    return da - db;
+  });
+
+  items.forEach(it => {
+    const color = paletteColor(it.c, DATA.customers.length, dark);
+    const x0 = it.x, x1 = it.x + it.dx;
+    const z0 = it.y, z1 = it.y + it.dy; // note: item.y is truck-width axis (z)
+    const y1 = it.h;
+
+    // top face
+    poly([P(x0,y1,z0), P(x1,y1,z0), P(x1,y1,z1), P(x0,y1,z1)], color, dark ? '#000' : '#0002', 1);
+    // front face (z0 side)
+    poly([P(x0,0,z0), P(x1,0,z0), P(x1,y1,z0), P(x0,y1,z0)], shade(color, 0.78), dark ? '#000' : '#0002');
+    // side face (x1 side)
+    poly([P(x1,0,z0), P(x1,0,z1), P(x1,y1,z1), P(x1,y1,z0)], shade(color, 0.6), dark ? '#000' : '#0002');
+  });
+
+  // truck wireframe edges (front pillars + top outline) drawn last for clarity
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 1.25;
+  [
+    [[0,0,0],[0,H,0]], [[L,0,0],[L,H,0]], [[0,0,W],[0,H,W]], [[L,0,W],[L,H,W]],
+    [[0,H,0],[L,H,0]], [[0,H,0],[0,H,W]], [[L,H,0],[L,H,W]], [[0,H,W],[L,H,W]],
+    [[0,0,0],[L,0,0]], [[0,0,W],[L,0,W]], [[0,0,0],[0,0,W]], [[L,0,0],[L,0,W]],
+  ].forEach(([a,b]) => {
+    const pa = P(...a), pb = P(...b);
+    ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
+  });
+
+  canvas._items = items;
+  canvas._P = P;
+}
+
+function shade(hsl, factor) {
+  const m = hsl.match(/hsl\(([\d.]+) ([\d.]+)% ([\d.]+)%\)/);
+  if (!m) return hsl;
+  const [, h, s, l] = m;
+  return `hsl(${h} ${s}% ${(parseFloat(l) * factor).toFixed(1)}%)`;
+}
+
+// hover tooltip
+const tooltip = document.getElementById('tooltip');
+document.getElementById('sim').addEventListener('mousemove', (e) => {
+  const canvas = e.target;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const items = canvas._items || [];
+  let hit = null;
+  // hit-test top faces roughly via bounding polygon of projected top face
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    const x0 = it.x, x1 = it.x + it.dx, z0 = it.y, z1 = it.y + it.dy, y1 = it.h;
+    const pts = [canvas._P(x0,y1,z0), canvas._P(x1,y1,z0), canvas._P(x1,y1,z1), canvas._P(x0,y1,z1),
+                 canvas._P(x0,0,z0)];
+    const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+    if (mx >= Math.min(...xs) && mx <= Math.max(...xs) && my >= Math.min(...ys) && my <= Math.max(...ys)) {
+      hit = it; break;
+    }
+  }
+  if (hit) {
+    tooltip.innerHTML = `訂單 ${hit.o}<br>品號 ${hit.it}<br>本堆 ${hit.b} 箱`;
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top = (e.clientY + 14) + 'px';
+    tooltip.classList.add('show');
+  } else {
+    tooltip.classList.remove('show');
+  }
+});
+document.getElementById('sim').addEventListener('mouseleave', () => tooltip.classList.remove('show'));
+
+window.addEventListener('resize', () => render());
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());
+
+buildStatRow();
+buildTruckList();
+render();
+</script>

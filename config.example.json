@@ -1,0 +1,14 @@
+{
+  "db": {
+    "informixdir": "C:\\Program Files (x86)\\Informix\\Client-SDK",
+    "dsn": "informix_t2",
+    "database": "T10",
+    "uid": "your_uid",
+    "pwd": "your_password"
+  },
+  "truck": {
+    "L": 8400,
+    "W": 2400,
+    "H": 2300
+  }
+}

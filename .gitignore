@@ -1,0 +1,8 @@
+# real credentials -- never commit, see config.example.json for the template
+config.json
+
+# generated per-run outputs (contain real customer/order data)
+output/*.csv
+output/*.html
+output/*.zip
+!output/.gitkeep
