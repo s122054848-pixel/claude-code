@@ -1,11 +1,12 @@
 """
-Build a dispatch sheet (CSV) and an interactive 3D-loading / route-map HTML report
+Build a dispatch sheet (CSV + XLSX) and an interactive 3D-loading / route-map HTML report
 from one day's order-line CSV (as produced by extract_orders.ps1).
 
 Usage:
     python build_dispatch.py --csv output\\orders_2026-07-08.csv --date 2026-07-08 ^
         --template lib\\template.html --out-html output\\dispatch_2026-07-08.html ^
-        --out-csv output\\dispatch_sheet_2026-07-08.csv --truck-l 8400 --truck-w 2400 --truck-h 2300
+        --out-csv output\\dispatch_sheet_2026-07-08.csv --out-xlsx output\\dispatch_sheet_2026-07-08.xlsx ^
+        --truck-l 8400 --truck-w 2400 --truck-h 2300
 
 run.ps1 wraps this call -- you normally don't need to invoke it directly.
 """
@@ -14,6 +15,11 @@ import csv
 import json
 import math
 import os
+import urllib.request
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 
 def haversine_km(p1, p2):
@@ -26,7 +32,97 @@ def haversine_km(p1, p2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
-def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, template_path):
+def _osrm_table_call(points_subset, base_url, timeout):
+    coord_str = ";".join(f"{lng},{lat}" for lat, lng in points_subset)
+    url = f"{base_url}/table/v1/driving/{coord_str}?annotations=distance"
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        data = json.load(resp)
+    if data.get("code") != "Ok":
+        raise ValueError(data.get("code", "unknown OSRM error"))
+    return data["distances"]
+
+
+def osrm_distance_matrix_km(codes, points, base_url="http://router.project-osrm.org", timeout=20, chunk=45):
+    """Real driving-distance matrix (km) for parallel lists of customer codes / (lat,lng)
+    points, via the public OSRM demo server. Returns {code_a: {code_b: km}}, possibly partial,
+    or None if every request failed outright -- callers should fall back to haversine_km for
+    any missing pair rather than fail the whole report over a network hiccup.
+
+    The public demo caps a single /table request at roughly 100x100 nodes, so on a busy day
+    with more than ~50 delivery customers this tiles the codes into groups of `chunk` and
+    fetches one request per unordered group pair (covering that pair's union, which yields
+    all four sub-blocks at once) instead of a single all-at-once call.
+    """
+    n = len(points)
+    if n < 2:
+        return None
+    groups = [list(range(i, min(i + chunk, n))) for i in range(0, n, chunk)]
+    result = {a: {} for a in codes}
+    any_ok = False
+    for gi in range(len(groups)):
+        for gj in range(gi, len(groups)):
+            union = groups[gi] if gi == gj else groups[gi] + groups[gj]
+            try:
+                dist = _osrm_table_call([points[i] for i in union], base_url, timeout)
+            except Exception as e:
+                print(f"WARNING: OSRM road-distance lookup failed for group {gi}x{gj} ({e}); those pairs fall back to straight-line distance.")
+                continue
+            any_ok = True
+            for a2, ai in enumerate(union):
+                for b2, bi in enumerate(union):
+                    d = dist[a2][b2]
+                    if d is not None:
+                        result[codes[ai]][codes[bi]] = d / 1000.0
+    return result if any_ok else None
+
+
+def write_dispatch_xlsx(out_xlsx, header, rows):
+    """Formatted .xlsx twin of the dispatch-sheet CSV -- same columns/rows, but with a real
+    number type on the numeric columns (so Excel won't mangle order numbers as dates/scientific
+    notation the way it sometimes does with plain CSV), bold header, borders, autosized columns,
+    a frozen header row and an autofilter so it's usable straight out of the download."""
+    numeric_cols = {6, 7, 8, 9, 10}  # 1-indexed: 箱數, 寬mm, 長mm, 厚mm, 堆疊數
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "排車明細"
+
+    header_fill = PatternFill("solid", fgColor="1F2937")
+    header_font = Font(bold=True, color="FFFFFF")
+    thin = Side(style="thin", color="D0D0D0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.append(header)
+    for col_idx in range(1, len(header) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    for row in rows:
+        ws.append(row)
+
+    max_len = [len(str(h)) for h in header]
+    for r_idx, row in enumerate(rows, start=2):
+        for c_idx, value in enumerate(row, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx)
+            cell.border = border
+            if c_idx in numeric_cols:
+                cell.alignment = Alignment(horizontal="right")
+            max_len[c_idx - 1] = max(max_len[c_idx - 1], len(str(value)))
+
+    for c_idx, width in enumerate(max_len, start=1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = min(max(width + 3, 8), 40)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{len(rows) + 1}"
+
+    os.makedirs(os.path.dirname(out_xlsx) or ".", exist_ok=True)
+    wb.save(out_xlsx)
+
+
+def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, template_path, out_xlsx=None):
     with open(csv_path, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
@@ -67,16 +163,30 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             cust_points[s["cust_code"]] = (s["lat"], s["lng"])
     no_geo = sorted({s["cust_code"] for s in stacks if s["cust_code"] not in cust_points})
 
+    # real driving-distance matrix between all delivery customers, via OSRM -- used both to
+    # order the route (nearest neighbour by road, not as the crow flies) and to report the
+    # actual distance a truck will drive. Falls back to haversine per-pair if OSRM is
+    # unreachable, so a network hiccup degrades the estimate rather than breaking the report.
+    dist_codes = list(cust_points.keys())
+    dist_matrix = osrm_distance_matrix_km(dist_codes, [cust_points[c] for c in dist_codes]) if dist_codes else None
+
+    def road_km(code_a, code_b):
+        if dist_matrix and code_a in dist_matrix and dist_matrix[code_a].get(code_b) is not None:
+            return dist_matrix[code_a][code_b]
+        return haversine_km(cust_points[code_a], cust_points[code_b])
+
     route_order = {}
     if cust_points:
         remaining_custs = dict(cust_points)
         start = min(remaining_custs, key=lambda c: (remaining_custs[c][0], remaining_custs[c][1]))
         order_seq = [start]
-        cur = remaining_custs.pop(start)
+        cur_code = start
+        remaining_custs.pop(start)
         while remaining_custs:
-            nxt = min(remaining_custs, key=lambda c: (remaining_custs[c][0] - cur[0]) ** 2 + (remaining_custs[c][1] - cur[1]) ** 2)
+            nxt = min(remaining_custs, key=lambda c: road_km(cur_code, c))
             order_seq.append(nxt)
-            cur = remaining_custs.pop(nxt)
+            cur_code = nxt
+            remaining_custs.pop(nxt)
         route_order = {c: i for i, c in enumerate(order_seq)}
     for i, c in enumerate(no_geo):
         route_order[c] = len(route_order) + i
@@ -152,20 +262,28 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         print(f"  Truck {t['truck_no']:2d}: {t['num_stacks']:3d} stacks, floor util {t['floor_utilization_pct']}%  [{tag}]")
 
     # dispatch sheet (排車單): per truck x order aggregation, grouped by delivery customer
+    sheet_header = ["車次", "送貨客戶代號", "送貨客戶名稱", "訂單號", "品號", "箱數", "寬mm", "長mm", "厚mm", "堆疊數"]
+    sheet_rows = []
+    for t in truck_out:
+        agg = {}
+        for it in t["items"]:
+            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["w"], it["l"], it["t"])
+            agg.setdefault(key, {"boxes": 0, "stacks": 0})
+            agg[key]["boxes"] += it["boxes"]
+            agg[key]["stacks"] += 1
+        for (cust_code, cust_name, order_no, item, w, l, th), v in sorted(agg.items(), key=lambda kv: route_order[kv[0][0]]):
+            sheet_rows.append([f"車次{t['truck_no']}", cust_code, cust_name, order_no, item, int(v["boxes"]), w, l, th, v["stacks"]])
+
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     with open(out_csv, "w", newline="", encoding="utf-8-sig") as f:
         wr = csv.writer(f)
-        wr.writerow(["車次", "送貨客戶代號", "送貨客戶名稱", "訂單號", "品號", "箱數", "寬mm", "長mm", "厚mm", "堆疊數"])
-        for t in truck_out:
-            agg = {}
-            for it in t["items"]:
-                key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["w"], it["l"], it["t"])
-                agg.setdefault(key, {"boxes": 0, "stacks": 0})
-                agg[key]["boxes"] += it["boxes"]
-                agg[key]["stacks"] += 1
-            for (cust_code, cust_name, order_no, item, w, l, th), v in sorted(agg.items(), key=lambda kv: route_order[kv[0][0]]):
-                wr.writerow([f"車次{t['truck_no']}", cust_code, cust_name, order_no, item, int(v["boxes"]), w, l, th, v["stacks"]])
+        wr.writerow(sheet_header)
+        wr.writerows(sheet_rows)
     print("Dispatch sheet written:", out_csv)
+
+    if out_xlsx:
+        write_dispatch_xlsx(out_xlsx, sheet_header, sheet_rows)
+        print("Dispatch sheet (Excel) written:", out_xlsx)
 
     # --- compact embeddable JSON for the HTML report (3D view + route map + dispatch table) ---
     customers = sorted({(s["cust_code"], s["cust_name"]) for s in stacks})
@@ -200,7 +318,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             for c in truck_custs if c in cust_points
         ]
         dist_km = sum(
-            haversine_km((stop_points[i]["lat"], stop_points[i]["lng"]), (stop_points[i + 1]["lat"], stop_points[i + 1]["lng"]))
+            road_km(stop_points[i]["code"], stop_points[i + 1]["code"])
             for i in range(len(stop_points) - 1)
         )
 
@@ -252,12 +370,13 @@ def main():
     ap.add_argument("--template", required=True, help="path to lib/template.html")
     ap.add_argument("--out-html", required=True)
     ap.add_argument("--out-csv", required=True, help="output dispatch-sheet CSV path")
+    ap.add_argument("--out-xlsx", help="output dispatch-sheet Excel (.xlsx) path (optional)")
     ap.add_argument("--truck-l", type=float, default=8400.0, help="truck interior length, mm")
     ap.add_argument("--truck-w", type=float, default=2400.0, help="truck interior width, mm")
     ap.add_argument("--truck-h", type=float, default=2300.0, help="truck interior height, mm")
     args = ap.parse_args()
 
-    build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template)
+    build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template, args.out_xlsx)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $ordersCsv = Join-Path $outDir "orders_$Date.csv"
 $dispatchCsv = Join-Path $outDir "dispatch_sheet_$Date.csv"
+$dispatchXlsx = Join-Path $outDir "dispatch_sheet_$Date.xlsx"
 $reportHtml = Join-Path $outDir "dispatch_$Date.html"
 
 Write-Host "== Step 1/2: extracting confirmed orders for $Date from T10 (32-bit ODBC) ==" -ForegroundColor Cyan
@@ -47,13 +48,14 @@ Write-Host "== Step 2/2: packing trucks and building the report (Python) ==" -Fo
 python (Join-Path $root "lib\build_dispatch.py") `
     --csv $ordersCsv --date $Date `
     --template (Join-Path $root "lib\template.html") `
-    --out-html $reportHtml --out-csv $dispatchCsv `
+    --out-html $reportHtml --out-csv $dispatchCsv --out-xlsx $dispatchXlsx `
     --truck-l $TruckL --truck-w $TruckW --truck-h $TruckH
 if ($LASTEXITCODE -ne 0) { throw "build_dispatch.py failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
-Write-Host "  Dispatch sheet: $dispatchCsv"
-Write-Host "  HTML report:    $reportHtml"
+Write-Host "  Dispatch sheet (CSV):   $dispatchCsv"
+Write-Host "  Dispatch sheet (Excel): $dispatchXlsx"
+Write-Host "  HTML report:            $reportHtml"
 
 if ($Open) { Start-Process $reportHtml }

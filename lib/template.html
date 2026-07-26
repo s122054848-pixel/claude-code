@@ -95,6 +95,21 @@
     font-size: 11px; color: var(--muted); letter-spacing: 0.04em;
   }
 
+  .export-btn {
+    align-self: center;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--surface);
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .export-btn:hover { opacity: 0.88; }
+
   .body-grid {
     display: grid;
     grid-template-columns: 240px 1fr;
@@ -284,6 +299,7 @@
       <div class="sub">龍潭廠出貨排車 · 資料日期 <span id="metaDate">—</span> · 車台內尺寸 <span id="metaTruck">—</span></div>
     </div>
     <div class="stat-row" id="statRow"></div>
+    <button type="button" id="exportExcelBtn" class="export-btn">匯出Excel</button>
   </header>
 
   <div class="body-grid">
@@ -416,7 +432,7 @@ function renderMapStats(t) {
   const el = document.getElementById('mapStats');
   const n = t.stops.length;
   el.innerHTML = `
-    <div class="stat2"><div class="num">${t.distanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km</div><div class="lbl">送貨距離(依站序直線加總)</div></div>
+    <div class="stat2"><div class="num">${t.distanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km</div><div class="lbl">送貨距離(依站序實際路網距離)</div></div>
     <div class="stat2"><div class="num">${n}</div><div class="lbl">送貨站數</div></div>
   `;
   const stopsEl = document.createElement('div');
@@ -516,6 +532,40 @@ function renderLegend(t) {
     return `<span class="chip"><span class="swatch" style="background:${color}"></span>${DATA.customers[ci]}</span>`;
   }).join('');
 }
+
+// ---- Excel export (whole day's dispatch sheet, all trucks) ----
+// Ships as an HTML table wrapped in an Excel-recognized MIME/namespace shell rather than a
+// real .xlsx binary, since this report is a single static file with no bundled libraries --
+// Excel opens this directly with correct cell typing (numbers stay numeric) and no warnings
+// as long as the extension is .xls, not .xlsx.
+function exportDispatchExcel() {
+  const header = ['車次', '送貨客戶代號', '送貨客戶名稱', '訂單號', '品號', '箱數', '寬mm', '長mm', '厚mm', '堆疊數'];
+  const rows = [];
+  DATA.trucks.forEach(t => {
+    t.rows.forEach(r => {
+      rows.push([`車次${t.n}`, r.cust_code, r.cust_name, r.order_no, r.item, r.boxes, r.w, r.l, r.t, r.stacks]);
+    });
+  });
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const headHtml = '<tr>' + header.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>';
+  const bodyHtml = rows.map(r => '<tr>' + r.map(v => `<td>${esc(v)}</td>`).join('') + '</tr>').join('');
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="UTF-8">
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+<x:Name>排車明細</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+<body><table border="1">${headHtml}${bodyHtml}</table></body></html>`;
+  const blob = new Blob(['﻿' + html], { type: 'application/vnd.ms-excel' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `排車明細_${DATA.meta.date}.xls`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+document.getElementById('exportExcelBtn').addEventListener('click', exportDispatchExcel);
 
 function renderTable(t) {
   const body = document.getElementById('dispatchBody');
