@@ -5,7 +5,7 @@
 
   Usage:
       .\run.ps1 -Date 2026-07-08
-      .\run.ps1 -Date 2026-07-08 -TruckL 8400 -TruckW 2400 -TruckH 2300
+      .\run.ps1 -Date 2026-07-08 -TruckL 8700 -TruckW 2400 -TruckH 2400
       .\run.ps1 -Date 2026-07-08 -Open        # also opens the HTML report when done
 
   Requires:

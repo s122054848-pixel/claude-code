@@ -6,7 +6,7 @@ Usage:
     python build_dispatch.py --csv output\\orders_2026-07-08.csv --date 2026-07-08 ^
         --template lib\\template.html --out-html output\\dispatch_2026-07-08.html ^
         --out-csv output\\dispatch_sheet_2026-07-08.csv --out-xlsx output\\dispatch_sheet_2026-07-08.xlsx ^
-        --truck-l 8400 --truck-w 2400 --truck-h 2300
+        --truck-l 8700 --truck-w 2400 --truck-h 2400
 
 run.ps1 wraps this call -- you normally don't need to invoke it directly.
 """
@@ -401,9 +401,9 @@ def main():
     ap.add_argument("--out-html", required=True)
     ap.add_argument("--out-csv", required=True, help="output dispatch-sheet CSV path")
     ap.add_argument("--out-xlsx", help="output dispatch-sheet Excel (.xlsx) path (optional)")
-    ap.add_argument("--truck-l", type=float, default=8400.0, help="truck interior length, mm")
+    ap.add_argument("--truck-l", type=float, default=8700.0, help="truck interior length, mm")
     ap.add_argument("--truck-w", type=float, default=2400.0, help="truck interior width, mm")
-    ap.add_argument("--truck-h", type=float, default=2300.0, help="truck interior height, mm")
+    ap.add_argument("--truck-h", type=float, default=2400.0, help="truck interior height, mm")
     args = ap.parse_args()
 
     build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template, args.out_xlsx)
