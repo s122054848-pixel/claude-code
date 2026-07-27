@@ -221,14 +221,14 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     for s in stacks:
         cust_name_by_code.setdefault(s["cust_code"], s["cust_name"])
 
-    # group by delivery customer, ordered along the proximity route, so nearby customers
-    # land on consecutive trucks; largest-footprint-first within a customer for packing efficiency.
-    stacks.sort(key=lambda s: (route_order[s["cust_code"]], -(s["w"] * s["l"])))
-
-    trucks = []
-
     def new_truck():
         return {"rows": [], "cur_x": 0.0}
+
+    def clone_truck(truck):
+        return {
+            "rows": [dict(r, items=list(r["items"])) for r in truck["rows"]],
+            "cur_x": truck["cur_x"],
+        }
 
     def try_place(truck, stack):
         w, l = stack["w"], stack["l"]
@@ -254,14 +254,88 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 return True
         return False
 
-    cur = new_truck()
-    trucks.append(cur)
+    def truck_cargo_vol(truck):
+        return sum(it["dx"] * it["dy"] * it["height"] for row in truck["rows"] for it in row["items"])
+
+    def truck_customers(truck):
+        return {it["cust_code"] for row in truck["rows"] for it in row["items"]}
+
+    def truck_proximity(truck, cust_code):
+        # nearest existing customer on this truck to the candidate customer, road-km -- 0 if
+        # the truck is empty or neither point has geo coords (no preference either way then).
+        if cust_code not in cust_points:
+            return 0.0
+        best = None
+        for c in truck_customers(truck):
+            if c == cust_code or c not in cust_points:
+                continue
+            d = road_km(c, cust_code)
+            if best is None or d < best:
+                best = d
+        return best if best is not None else 0.0
+
+    # Best-fit-decreasing bin packing, applied at the CUSTOMER level (never split a customer's
+    # order across trucks unless it doesn't fit even a single empty one): each customer's whole
+    # stack list is tried against every existing truck, and committed to whichever truck can
+    # hold ALL of it and leaves the LEAST unused cargo VOLUME afterward (tied-broken by road
+    # distance to that truck's existing customers) -- 裝載率優先, 距離其次. Volume, not floor
+    # area, since that's what 裝載率 itself means; the per-placement geometry check (try_place)
+    # still has to be floor/row-based -- that's real physical feasibility, not a preference.
+    TRUCK_VOL = truck_l * truck_w * truck_h
+    VOL_BUCKET = TRUCK_VOL * 0.014  # ~1.4% of truck volume: trucks within the same bucket count as "equally full"
+
+    by_cust = {}
     for s in stacks:
-        if not try_place(cur, s):
-            cur = new_truck()
-            trucks.append(cur)
+        by_cust.setdefault(s["cust_code"], []).append(s)
+    cust_groups = list(by_cust.values())
+    for g in cust_groups:
+        g.sort(key=lambda s: (-(s["w"] * s["l"]), s["order_no"], s["item_code"]))
+    cust_groups.sort(key=lambda g: -sum(s["w"] * s["l"] for s in g))
+
+    trucks = []
+    for cust_stacks in cust_groups:
+        cust_code = cust_stacks[0]["cust_code"]
+        best_idx, best_state, best_bucket, best_prox = -1, None, None, None
+        for i, truck in enumerate(trucks):
+            trial = clone_truck(truck)
+            ok = True
+            for s in cust_stacks:
+                if not try_place(trial, s):
+                    ok = False
+                    break
+            if not ok:
+                continue
+            remaining = TRUCK_VOL - truck_cargo_vol(trial)
+            bucket = math.floor(remaining / VOL_BUCKET)
+            prox = truck_proximity(truck, cust_code)
+            if best_idx < 0 or bucket < best_bucket or (bucket == best_bucket and prox < best_prox):
+                best_idx, best_state, best_bucket, best_prox = i, trial, bucket, prox
+        if best_idx >= 0:
+            trucks[best_idx] = best_state
+            continue
+
+        # no existing truck can take the whole customer -- try a brand new (empty) truck
+        # before ever resorting to splitting.
+        fresh = new_truck()
+        fresh_ok = True
+        for s in cust_stacks:
+            if not try_place(fresh, s):
+                fresh_ok = False
+                break
+        if fresh_ok:
+            trucks.append(fresh)
+            continue
+
+        # doesn't fit any single truck even empty -- this customer's own order genuinely
+        # needs more than one truck; fill dedicated fresh trucks one stack at a time.
+        cur = new_truck()
+        for s in cust_stacks:
             if not try_place(cur, s):
-                raise RuntimeError(f"stack too large for an empty truck: {s}")
+                trucks.append(cur)
+                cur = new_truck()
+                if not try_place(cur, s):
+                    raise RuntimeError(f"stack too large for an empty truck: {s}")
+        trucks.append(cur)
 
     truck_out = []
     for ti, t in enumerate(trucks, start=1):
