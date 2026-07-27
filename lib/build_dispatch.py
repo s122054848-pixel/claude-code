@@ -266,7 +266,9 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     truck_out = []
     for ti, t in enumerate(trucks, start=1):
         items = [it for row in t["rows"] for it in row["items"]]
-        floor_used = sum(it["dx"] * it["dy"] for it in items)
+        # 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積除以整台
+        # 車廂容積,才反映得出這台車實際裝了多少東西,而不是只看地板佔了多少。
+        cargo_vol = sum(it["dx"] * it["dy"] * it["height"] for it in items)
         cust_counts = {}
         for it in items:
             key = (it["cust_code"], it["cust_name"])
@@ -274,7 +276,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         primary_cust = max(cust_counts.items(), key=lambda kv: kv[1])[0] if cust_counts else ("", "")
         truck_out.append({
             "truck_no": ti,
-            "floor_utilization_pct": round(floor_used / (truck_l * truck_w) * 100, 1),
+            "load_pct": round(cargo_vol / (truck_l * truck_w * truck_h) * 100, 1),
             "num_stacks": len(items),
             "num_customers": len(cust_counts),
             "primary_cust_code": primary_cust[0],
@@ -285,7 +287,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     print(f"Total trucks needed: {len(truck_out)}")
     for t in truck_out:
         tag = t["primary_cust_name"] + ("" if t["num_customers"] == 1 else f"+{t['num_customers'] - 1}")
-        print(f"  Truck {t['truck_no']:2d}: {t['num_stacks']:3d} stacks, floor util {t['floor_utilization_pct']}%  [{tag}]")
+        print(f"  Truck {t['truck_no']:2d}: {t['num_stacks']:3d} stacks, load {t['load_pct']}%  [{tag}]")
 
     # dispatch sheet (排車單): per truck x order aggregation, grouped by delivery customer
     sheet_header = ["車次", "送貨客戶代號", "送貨客戶名稱", "訂單號", "品號", "箱數", "寬mm", "長mm", "厚mm", "堆疊數"]
@@ -350,7 +352,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         )
 
         compact_trucks.append({
-            "n": t["truck_no"], "util": t["floor_utilization_pct"], "stacks": t["num_stacks"],
+            "n": t["truck_no"], "util": t["load_pct"], "stacks": t["num_stacks"],
             "primaryCust": f"{t['primary_cust_code']} {t['primary_cust_name']}" + ("" if t["num_customers"] == 1 else f" 等{t['num_customers']}家"),
             "items": citems, "rows": rows_agg,
             "stops": stop_points, "distanceKm": round(dist_km, 1),

@@ -304,7 +304,7 @@
 
   <div class="body-grid">
     <aside class="truck-list" id="truckList">
-      <div class="list-head">車次列表(依樓面使用率)</div>
+      <div class="list-head">車次列表(依裝載率)</div>
     </aside>
 
     <main class="viewport">
@@ -313,7 +313,7 @@
           <h2 id="truckTitle">車次 1</h2>
           <div class="sub" id="truckCust" style="color:var(--muted);font-size:12.5px;margin-top:2px;"></div>
         </div>
-        <span class="util-pill" id="utilPill">樓面使用率 —</span>
+        <span class="util-pill" id="utilPill">裝載率 —</span>
       </div>
 
       <div class="dual-panel">
@@ -420,7 +420,7 @@ function render() {
   document.getElementById('truckTitle').textContent = `車次 ${t.n}`;
   document.getElementById('truckCust').textContent = `送貨客戶:${t.primaryCust}`;
   const pill = document.getElementById('utilPill');
-  pill.textContent = `樓面使用率 ${t.util}%`;
+  pill.textContent = `裝載率 ${t.util}%`;
   pill.className = 'util-pill ' + (t.util >= 75 ? 'good' : (t.util < 50 ? 'warn' : ''));
 
   renderLegend(t);
