@@ -76,6 +76,32 @@ def osrm_distance_matrix_km(codes, points, base_url="http://router.project-osrm.
     return result if any_ok else None
 
 
+def two_opt_improve(codes, road_km_fn):
+    """2-opt local search over an open path (no fixed start/end -- a truck's stop order isn't
+    anchored to a depot here) to shorten the total consecutive-stop distance. Nearest-neighbour
+    alone routinely leaves one long doubling-back leg because it never looks past the very next
+    stop; with only a handful of stops per truck, exhaustive 2-opt converges in a few passes."""
+    if len(codes) < 3:
+        return list(codes)
+
+    def path_dist(order):
+        return sum(road_km_fn(order[i], order[i + 1]) for i in range(len(order) - 1))
+
+    best = list(codes)
+    best_dist = path_dist(best)
+    improved = True
+    while improved:
+        improved = False
+        for i in range(len(best) - 1):
+            for j in range(i + 1, len(best)):
+                cand = best[:i] + best[i:j + 1][::-1] + best[j + 1:]
+                cand_dist = path_dist(cand)
+                if cand_dist < best_dist - 1e-9:
+                    best, best_dist = cand, cand_dist
+                    improved = True
+    return best
+
+
 def write_dispatch_xlsx(out_xlsx, header, rows):
     """Formatted .xlsx twin of the dispatch-sheet CSV -- same columns/rows, but with a real
     number type on the numeric columns (so Excel won't mangle order numbers as dates/scientific
@@ -312,10 +338,11 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             for k, v in sorted(agg.items(), key=lambda kv: route_order[kv[0][0]])
         ]
 
-        truck_custs = sorted({it["cust_code"] for it in t["items"]}, key=lambda c: route_order[c])
+        truck_custs = sorted({it["cust_code"] for it in t["items"] if it["cust_code"] in cust_points}, key=lambda c: route_order[c])
+        truck_custs = two_opt_improve(truck_custs, road_km)
         stop_points = [
             {"code": c, "name": cust_name_by_code[c], "lat": cust_points[c][0], "lng": cust_points[c][1]}
-            for c in truck_custs if c in cust_points
+            for c in truck_custs
         ]
         dist_km = sum(
             road_km(stop_points[i]["code"], stop_points[i + 1]["code"])
@@ -347,6 +374,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             "totalTrucks": len(compact_trucks),
             "totalCustomers": len(customers),
             "custWithGeo": len(cust_points),
+            "totalDistanceKm": round(sum(t["distanceKm"] for t in compact_trucks), 1),
         },
     }
 

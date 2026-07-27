@@ -1,5 +1,6 @@
 # real credentials -- never commit, see config.example.json for the template
 config.json
+__pycache__/
 
 # generated per-run outputs (contain real customer/order data)
 output/*.csv

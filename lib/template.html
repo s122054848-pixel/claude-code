@@ -379,6 +379,7 @@ function buildStatRow() {
     ['送貨客戶數', fmtInt(m.totalCustomers)],
     ['總箱數', fmtInt(m.totalBoxes)],
     ['需求車次', fmtInt(m.totalTrucks)],
+    ['總配送距離', `${m.totalDistanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km`],
   ];
   const row = document.getElementById('statRow');
   row.innerHTML = stats.map(([lbl, num]) =>
