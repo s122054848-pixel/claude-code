@@ -4,7 +4,10 @@
     "dsn": "informix_t2",
     "database": "T10",
     "uid": "your_uid",
-    "pwd": "your_password"
+    "pwd": "your_password",
+    "sqlHostsAlias": "on_tcp1",
+    "sqlHostsHost": "ask-your-dba-for-this.example.com",
+    "sqlHostsPort": "8001"
   },
   "truck": {
     "L": 8400,

@@ -31,9 +31,24 @@ cd C:\Bernard\IT\Claude\dispatch-planner
 
 ## 事前準備
 
-1. **32-bit Informix ODBC 驅動**:這台機器需已安裝 IBM Informix Client-SDK(`C:\Program Files (x86)\Informix\Client-SDK`),且系統已註冊 `INFORMIX 3.80 32 BIT` 這個 ODBC 驅動。驅動是32位元的,所以 `run.ps1` 會自動呼叫 `C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`(32位元版PowerShell)來執行資料庫查詢那一段,不需要手動切換。
-2. **Python 3**(64位元即可,只有裝箱演算法和報表產生用得到,不碰資料庫):需能在 PATH 上用 `python` 執行。
-3. **`config.json`**:已填好連線資訊(帳號密碼、DSN、資料庫名稱)與預設車台尺寸。這個檔案含明碼密碼,不要外流或上傳到公開的地方;範本在 `config.example.json`。
+1. **32-bit Informix ODBC 驅動**:這台機器需已安裝 IBM Informix Client-SDK(`C:\Program Files (x86)\Informix\Client-SDK`),且系統已註冊 `INFORMIX 3.34 32 BIT` 這個 ODBC 驅動。驅動是32位元的,所以 `run.ps1` 會自動呼叫 `C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`(32位元版PowerShell)來執行資料庫查詢那一段,不需要手動切換。
+2. **`informix_t2` 這個 ODBC DSN**:如果這台機器從沒連過ERP、還沒有這個DSN,見下方「換一台新電腦怎麼設定」。
+3. **Python 3**(64位元即可,只有裝箱演算法和報表產生用得到,不碰資料庫):需能在 PATH 上用 `python` 執行。
+4. **`config.json`**:已填好連線資訊(帳號密碼、DSN、資料庫名稱)與預設車台尺寸。這個檔案含明碼密碼,不要外流或上傳到公開的地方;範本在 `config.example.json`。
+
+## 換一台新電腦怎麼設定(沒有 informix_t2 這個DSN的話)
+
+大部分人不需要看這節——直接拿別人已經產生好的 `dispatch_<date>.html`/`.xlsx` 報表來看就好,那些是純靜態檔案,不需要裝任何東西、不需要DSN。只有想在**自己的電腦上直接跑 `run.ps1` 查ERP**的人才需要這節。
+
+1. 先跟IT/管ERP的人要 **IBM Informix Client-SDK(32-bit)** 安裝檔,裝好(這步無法自動化,是廠商的安裝程式)。
+2. 把 `config.example.json` 複製成 `config.json`,填入你自己的ERP帳號密碼,以及 `sqlHostsAlias`/`sqlHostsHost`/`sqlHostsPort`(跟DBA/IT要ERP主機的內部位址和連線代號——**這些是內部網路資訊,故意不寫在README或任何會進git的檔案裡**,只填在 `config.json`,而 `config.json` 已經被 `.gitignore` 排除)。
+3. 用系統管理員身份開 PowerShell,執行:
+   ```powershell
+   cd C:\path\to\dispatch-planner
+   .\setup\Setup-InformixConnection.ps1
+   ```
+   這支腳本會讀 `config.json` 裡剛填的位址,把ERP主機代號寫進機器的 Informix 設定,並建立對應的ODBC DSN。DSN本身**不會**存帳號密碼,密碼只放在你自己的 `config.json`,腳本永遠不會碰到你的密碼。重複執行是安全的。
+4. 測試:`.\run.ps1 -Date <隨便一個最近的日期> -Open`
 
 ## 專案結構
 
@@ -43,6 +58,8 @@ dispatch-planner/
   run.ps1                   命令列主要進入點
   config.json               連線資訊 + 預設車台尺寸(實際使用,含密碼)
   config.example.json       範本(密碼是佔位字串,不含真實密碼)
+  setup/
+    Setup-InformixConnection.ps1   新電腦第一次設定DSN用,見上方「換一台新電腦怎麼設定」
   lib/
     extract_orders.ps1       查ERP、輸出 orders_<date>.csv(32-bit PowerShell執行)
     build_dispatch.py        排車演算法 + 產生排車單CSV + 產生HTML報表
