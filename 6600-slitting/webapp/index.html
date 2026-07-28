@@ -134,8 +134,13 @@
     </section>
 
     <div id="statusBanner" class="status-banner state-idle">
-      <span class="spinner" id="statusSpinner" hidden></span>
-      <span id="statusLine">請上傳或編輯訂單資料，然後於上方選擇要執行的功能。</span>
+      <div class="status-banner-row">
+        <span class="spinner" id="statusSpinner" hidden></span>
+        <span id="statusLine">請上傳或編輯訂單資料，然後於上方選擇要執行的功能。</span>
+      </div>
+      <div class="progress-track" id="statusProgressWrap" hidden>
+        <div class="progress-fill" id="statusProgressFill"></div>
+      </div>
     </div>
   </aside>
 

@@ -92,8 +92,13 @@
     </section>
 
     <div id="statusBanner" class="status-banner state-idle">
-      <span class="spinner" id="statusSpinner" hidden></span>
-      <span id="statusLine">請上傳或編輯紙管需求資料，系統會自動計算紙管組合計畫。</span>
+      <div class="status-banner-row">
+        <span class="spinner" id="statusSpinner" hidden></span>
+        <span id="statusLine">請上傳或編輯紙管需求資料，系統會自動計算紙管組合計畫。</span>
+      </div>
+      <div class="progress-track" id="statusProgressWrap" hidden>
+        <div class="progress-fill" id="statusProgressFill"></div>
+      </div>
     </div>
   </aside>
 

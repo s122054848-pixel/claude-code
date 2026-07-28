@@ -254,8 +254,8 @@ button.full { width: 100%; margin-top: 4px; }
 /* ---- status banner ---- */
 .status-banner {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 14px;
   border-radius: var(--radius);
   font-size: 0.85rem;
@@ -264,6 +264,33 @@ button.full { width: 100%; margin-top: 4px; }
   color: var(--muted);
   box-shadow: var(--shadow);
 }
+
+.status-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.status-banner.state-warn .progress-fill,
+.status-banner.state-warn .progress-track {
+  background-color: #fbdf9a;
+}
+.status-banner.state-warn .progress-fill { background: #a15c00; }
 
 .status-banner.state-busy {
   background: var(--accent-soft);

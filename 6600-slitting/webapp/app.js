@@ -64,6 +64,8 @@ const els = {
   statusBanner: document.getElementById("statusBanner"),
   statusSpinner: document.getElementById("statusSpinner"),
   statusLine: document.getElementById("statusLine"),
+  statusProgressWrap: document.getElementById("statusProgressWrap"),
+  statusProgressFill: document.getElementById("statusProgressFill"),
   warningsPanel: document.getElementById("warningsPanel"),
   warningsList: document.getElementById("warningsList"),
   summaryPanel: document.getElementById("summaryPanel"),
@@ -124,31 +126,54 @@ els.trimAllowance.addEventListener("input", () => {
 // A single solve can legitimately take over a minute (harder MIPs with the
 // min-batch-size constraint don't converge quickly), during which only one
 // or two status lines would otherwise change - which can look identical to
-// a frozen/broken page. Show a live elapsed-time counter while busy so it's
-// visibly still working.
+// a frozen/broken page. Show a live elapsed-time counter while busy, plus
+// (when the caller knows the current stage's time budget) a progress bar
+// showing how far into that budget the stage has gotten - not a measure of
+// solution quality/gap (HiGHS's WASM binding here doesn't expose live
+// solver-internal progress), just a "how much of its allotted time has this
+// step used" indicator so a long wait still visibly moves.
 let elapsedTimer = null;
 let pipelineStartTime = null;
 let lastBusyMsg = "";
+let stageStartTime = null;
+let stageCapSec = null;
 
-function setStatus(msg, state) {
+function updateBusyStatusLine() {
+  const totalS = Math.round((Date.now() - pipelineStartTime) / 1000);
+  let text = `${lastBusyMsg}（已運算 ${totalS} 秒`;
+  if (stageCapSec) {
+    const stageS = Math.round((Date.now() - stageStartTime) / 1000);
+    const pct = Math.max(0, Math.min(99, Math.round((stageS / stageCapSec) * 100)));
+    text += `，本階段進度約 ${pct}%（上限 ${stageCapSec} 秒）`;
+    els.statusProgressWrap.hidden = false;
+    els.statusProgressFill.style.width = pct + "%";
+  } else {
+    els.statusProgressWrap.hidden = true;
+  }
+  els.statusLine.textContent = text + "）";
+}
+
+function setStatus(msg, state, stageCap) {
   if (state === "busy") {
     lastBusyMsg = msg;
     if (!pipelineStartTime) pipelineStartTime = Date.now();
-    if (!elapsedTimer) {
-      elapsedTimer = setInterval(() => {
-        const s = Math.round((Date.now() - pipelineStartTime) / 1000);
-        els.statusLine.textContent = `${lastBusyMsg}（已運算 ${s} 秒）`;
-      }, 1000);
+    if (stageCap !== stageCapSec) {
+      stageCapSec = stageCap || null;
+      stageStartTime = Date.now();
     }
-    const s = Math.round((Date.now() - pipelineStartTime) / 1000);
-    els.statusLine.textContent = `${msg}（已運算 ${s} 秒）`;
+    if (!elapsedTimer) elapsedTimer = setInterval(updateBusyStatusLine, 1000);
+    updateBusyStatusLine();
   } else {
     if (elapsedTimer) {
       clearInterval(elapsedTimer);
       elapsedTimer = null;
     }
     pipelineStartTime = null;
+    stageStartTime = null;
+    stageCapSec = null;
     els.statusLine.textContent = msg;
+    els.statusProgressWrap.hidden = true;
+    els.statusProgressFill.style.width = "0%";
   }
   els.statusBanner.className = "status-banner state-" + (state || "idle");
   els.statusSpinner.hidden = state !== "busy";
@@ -687,13 +712,16 @@ function extractPatternSolution(sol, patternsFull, widths) {
 //      larger widths without sacrificing the overall fulfillment rate
 //   3. min tube count, pinned to stage 2's per-width allocation so
 //      roll-count optimization can't trade large-width fulfillment away
-async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
+async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
   if (patternsFull.length === 0 || widths.length === 0) {
     return { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
   }
+  const tag = label || "紙管";
   const itemsList = patternsFull.map((p) => p.items);
   const counts = itemsList.map(patternToCounts);
   const lp1 = buildLP(itemsList, counts, widths, demand, { mode: "max_fulfill" });
+  setStatus(`${tag}：求解最大排產量中（最多 ${t1} 秒）...`, "busy", t1);
+  await yieldToUI();
   const sol1 = await solveLP(lp1, t1);
   const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
 
@@ -702,6 +730,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
     fulfillFloor,
     weightFn: (w) => w,
   });
+  setStatus(`${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中（最多 ${t1} 秒）...`, "busy", t1);
+  await yieldToUI();
   const solPriority = await solveLP(lpPriority, t1);
   let extPriority = extractPatternSolution(solPriority, patternsFull, widths);
   if (extPriority.totalProduced < fulfillFloor - 0.5) {
@@ -717,6 +747,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2) {
     fulfillFloor,
     perWidthFloor: priorityFloor,
   });
+  setStatus(`${tag}：求解最少母管數中（最多 ${t2} 秒）...`, "busy", t2);
+  await yieldToUI();
   const sol2 = await solveLP(lp2, t2);
 
   let ext = extractPatternSolution(sol2, patternsFull, widths);
@@ -760,7 +792,7 @@ async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
 
   const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
-  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2);
+  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2, "紙管Round1");
 
   const remainingWidths = tubeWidths.filter(
     (w) => tubeDemand[String(w)] - (round1.produced[String(w)] || 0) > 0
@@ -773,7 +805,7 @@ async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
   let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
   if (remainingWidths.length > 0 && round2Lengths.length > 0) {
     const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Lengths);
-    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeT1, tubeT2);
+    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeT1, tubeT2, "紙管Round2");
   }
 
   const totalDemand = tubeWidths.reduce((s, w) => s + tubeDemand[String(w)], 0);
@@ -892,16 +924,17 @@ function getHighsInline() {
   return highsInstancePromise;
 }
 
-// HiGHS (and CBC before it) will happily burn the entire time_limit trying
-// to *prove* optimality even after it already found the true-best incumbent
-// in a fraction of that time, whenever the LP-relaxation bound isn't
-// integer-achievable (very common with the min-batch-size binaries). Once
-// the solution is within this relative gap of the best proven bound, HiGHS
-// stops early instead of continuing to search for no real benefit. Tuned
-// against the real dataset: mip_rel_gap=0.0005 with a 30s cap reproduces the
-// exact optimum (2149/2151, matching a from-scratch ~140s/no-gap run) in
-// ~30s - tighter gaps (0.0001) or shorter caps (15-20s) settle a bit short.
-const MIP_REL_GAP = 0.0005;
+// A nonzero mip_rel_gap lets HiGHS stop as soon as it's within that relative
+// distance of its own best proven bound, instead of continuing to search.
+// This was previously tuned to 0.0005 for speed, but that bound is computed
+// against the LP relaxation - which the min-batch-size binaries can leave
+// quite loose - so a nominal 0.05% tolerance can translate into a much
+// larger real shortfall against the true achievable optimum (observed: a
+// solve reported "Optimal" 7 pieces (~1.1%) short of a demonstrably
+// achievable total). Set to 0 (exact optimality, no early stopping) so an
+// "Optimal" status is always trustworthy; callers relying on this pay for
+// it with longer solve times and should size their time_limit accordingly.
+const MIP_REL_GAP = 0;
 
 async function solveLP(lpText, timeLimitSec) {
   const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
@@ -1044,12 +1077,19 @@ async function runPipeline(mode) {
     const lockedFloor = {};
     const round1Achieved = {};
     let lastRound1Sol = null;
+    // Each per-width solve below has its own status; if any of them didn't
+    // reach "Optimal" (e.g. hit priorityCap without proving it), that
+    // width's achieved value - and everything locked in after it - may be
+    // short of the true best. Track how many so the summary can flag it
+    // instead of silently trusting every value.
+    let round1NonOptimalCount = 0;
 
     for (let idx = 0; idx < round1WidthsDesc.length; idx++) {
       const w = round1WidthsDesc[idx];
       setStatus(
         `Round1：大尺寸門幅組合中（${idx + 1}/${round1WidthsDesc.length}，規格 ${w}mm，最多 ${priorityCap} 秒）...`,
-        "busy"
+        "busy",
+        priorityCap
       );
       await yieldToUI();
       const lpPriority = buildLP(patterns, patternCounts, widths, lockedDemand, {
@@ -1060,6 +1100,7 @@ async function runPipeline(mode) {
       });
       const solPriority = await solveLP(lpPriority, priorityCap);
       const val = solPriority && Number.isFinite(solPriority.ObjectiveValue) ? Math.max(0, Math.round(solPriority.ObjectiveValue)) : 0;
+      if (!solPriority || solPriority.Status !== "Optimal") round1NonOptimalCount++;
       round1Achieved[String(w)] = val;
       lockedDemand[String(w)] = val;
       lockedFloor[String(w)] = val;
@@ -1074,7 +1115,8 @@ async function runPipeline(mode) {
     if (round1Total > 0) {
       setStatus(
         `Round1：大尺寸組合完成，共排產 ${round1Total} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
-        "busy"
+        "busy",
+        t2
       );
       await yieldToUI();
       const lpR1Rolls = buildLP(patterns, patternCounts, widths, demand, {
@@ -1107,9 +1149,16 @@ async function runPipeline(mode) {
 
     let round2Rows = [];
     let round2Produced = {};
+    // Two independent statuses matter here: round2FloorStatus is from the
+    // max_fulfill stage that actually determines the achievable total
+    // (round2Floor) - if THIS isn't "Optimal", the total itself may be
+    // short of the true best, no matter what the min-rolls stage below
+    // reports. round2Status (min-rolls) only tells you whether the roll
+    // count is minimal for whatever floor was handed to it.
+    let round2FloorStatus = "N/A";
     let round2Status = "N/A";
     if (remainingWidths.length > 0) {
-      setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy");
+      setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy", t2);
       await yieldToUI();
       const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces, trimAllowance);
       if (round2Patterns.length > 0) {
@@ -1121,11 +1170,13 @@ async function runPipeline(mode) {
         });
         const solR2a = await solveLP(lpR2a, t2);
         const round2Floor = solR2a && Number.isFinite(solR2a.ObjectiveValue) ? Math.round(solR2a.ObjectiveValue) : 0;
+        round2FloorStatus = solR2a ? solR2a.Status : "Failed";
 
         if (round2Floor > 0) {
           setStatus(
-            `Round2：最高排抄率為 ${round2Floor} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
-            "busy"
+            `Round2：最高排抄率為 ${round2Floor} 件（狀態：${round2FloorStatus}）。求解最少母卷數中（最多 ${t2} 秒）...`,
+            "busy",
+            t2
           );
           await yieldToUI();
           const lpR2b = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
@@ -1187,8 +1238,10 @@ async function runPipeline(mode) {
       totalRolls,
       patternTypes: sequencedRows.length,
       totalKnifeMovement: totalCost,
-      priorityStatus: `Round1：${round1WidthsDesc.length} 規格大到小組合（${round1RollsStatus}）`,
-      rollsStatus: `Round2：${remainingWidths.length} 規格最高排抄率（${round2Status}）`,
+      priorityStatus:
+        `Round1：${round1WidthsDesc.length} 規格大到小組合，最少母卷數${round1RollsStatus}` +
+        (round1NonOptimalCount > 0 ? `（${round1NonOptimalCount} 個規格未證明達到最優，其排產量可能可再提升）` : ""),
+      rollsStatus: `Round2：${remainingWidths.length} 規格，最大排產量${round2FloorStatus}／最少母卷數${round2Status}`,
     });
     renderPlanTable(sequencedRows, motherWidth);
     renderFulfillTable(widths, demand, produced);
