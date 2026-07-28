@@ -784,7 +784,7 @@ function readLengthList(ids) {
 // re-solve, then min-tubes), so at this per-stage cap the absolute worst
 // case for round1+round2 combined is 6 * cap; default 12s keeps that at 72s.
 async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
-  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 3600);
+  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 60);
   const tubeT1 = Math.min(t1, tubeStageCap);
   const tubeT2 = Math.min(t2, tubeStageCap);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
@@ -957,13 +957,78 @@ function autoRound2TimeLimit(patternCount) {
   return Math.min(300, Math.max(30, Math.round(patternCount / 10)));
 }
 
+// HiGHS's own time_limit option is supposed to bound how long a solve
+// takes, but it's only checked at internal B&B node boundaries - on hard
+// instances (e.g. many semi-continuous min-batch binaries) a single node's
+// LP relaxation or a postsolve/cleanup step can occasionally run well past
+// that nominal cap, leaving the page waiting indefinitely with no result
+// ("Time limit reached" never gets reported because the WASM call itself
+// never returns). Give it some grace beyond the requested limit, but
+// enforce a hard external ceiling as a safety net so a solve is always
+// guaranteed to end - worst case reported as a failed/timed-out stage
+// rather than hanging forever.
+function hardTimeoutMsFor(timeLimitSec) {
+  const bufferSec = Math.max(30, Math.min(120, Math.round(timeLimitSec * 0.25)));
+  return (timeLimitSec + bufferSec) * 1000;
+}
+
+function withHardTimeout(promise, ms, onTimeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (onTimeout) onTimeout();
+      const err = new Error(`Solve exceeded hard time ceiling (${Math.round(ms / 1000)}s)`);
+      err.hardTimeout = true;
+      reject(err);
+    }, ms);
+    promise.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+// Forcibly kills the current worker (Worker.terminate() is the only way to
+// interrupt a synchronous WASM call already in progress) and rejects
+// anything still waiting on it, so a fresh worker is created for the next
+// solve instead of reusing one that may be stuck.
+function resetWorker() {
+  if (highsWorker) {
+    try {
+      highsWorker.terminate();
+    } catch (err) {
+      // ignore
+    }
+  }
+  highsWorker = null;
+  for (const pending of workerPending.values()) pending.reject(new Error("worker reset after hard timeout"));
+  workerPending.clear();
+}
+
 async function solveLP(lpText, timeLimitSec, gapOverride) {
   const gap = gapOverride != null ? gapOverride : MIP_REL_GAP;
   const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: gap };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
-      return await solveInWorker(lpText, options);
+      return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
     } catch (err) {
+      if (err && err.hardTimeout) {
+        console.warn(err.message, "- aborting this solve stage instead of hanging; treating it as failed.");
+        resetWorker();
+        return null;
+      }
       console.warn("Worker solve failed, falling back to main-thread solve:", err);
       workerBroken = true;
     }
@@ -1037,8 +1102,8 @@ async function runPipeline(mode) {
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
     const trimAllowance = Math.min(600, Math.max(-50, Math.round(Number(els.trimAllowance.value)) || 0));
-    const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 3600);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 3600);
+    const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 60);
+    const t2 = Math.max(1, Number(els.timeLimit2.value) || 300);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       setStatus("母卷寬度必須是正整數。", "error");

@@ -721,7 +721,7 @@ function readLengthList(ids) {
 // the absolute worst case for round1+round2 combined is 6 * cap; default
 // 12s keeps that at 72s.
 async function runTubePlan(demand, widths) {
-  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 3600);
+  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 60);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
@@ -858,12 +858,70 @@ function getHighsInline() {
 // trustworthy - see webapp/app.js for the full rationale.
 const MIP_REL_GAP = 0;
 
+// HiGHS's own time_limit option is only checked at internal B&B node
+// boundaries - on hard instances a single node can occasionally run well
+// past that nominal cap, leaving the page waiting indefinitely with no
+// result. Enforce a hard external ceiling (requested limit + grace) as a
+// safety net so a solve always ends, worst case reported as a failed/
+// timed-out stage rather than hanging forever. See webapp/app.js for the
+// full rationale (identical logic, kept in sync).
+function hardTimeoutMsFor(timeLimitSec) {
+  const bufferSec = Math.max(30, Math.min(120, Math.round(timeLimitSec * 0.25)));
+  return (timeLimitSec + bufferSec) * 1000;
+}
+
+function withHardTimeout(promise, ms, onTimeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (onTimeout) onTimeout();
+      const err = new Error(`Solve exceeded hard time ceiling (${Math.round(ms / 1000)}s)`);
+      err.hardTimeout = true;
+      reject(err);
+    }, ms);
+    promise.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function resetWorker() {
+  if (highsWorker) {
+    try {
+      highsWorker.terminate();
+    } catch (err) {
+      // ignore
+    }
+  }
+  highsWorker = null;
+  for (const pending of workerPending.values()) pending.reject(new Error("worker reset after hard timeout"));
+  workerPending.clear();
+}
+
 async function solveLP(lpText, timeLimitSec) {
   const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
-      return await solveInWorker(lpText, options);
+      return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
     } catch (err) {
+      if (err && err.hardTimeout) {
+        console.warn(err.message, "- aborting this solve stage instead of hanging; treating it as failed.");
+        resetWorker();
+        return null;
+      }
       console.warn("Worker solve failed, falling back to main-thread solve:", err);
       workerBroken = true;
     }
