@@ -784,7 +784,7 @@ function readLengthList(ids) {
 // re-solve, then min-tubes), so at this per-stage cap the absolute worst
 // case for round1+round2 combined is 6 * cap; default 12s keeps that at 72s.
 async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
-  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 12);
+  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 3600);
   const tubeT1 = Math.min(t1, tubeStageCap);
   const tubeT2 = Math.min(t2, tubeStageCap);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
@@ -1015,8 +1015,8 @@ async function runPipeline(mode) {
     const motherWidth = Math.round(Number(els.motherWidth.value));
     const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
     const trimAllowance = Math.min(600, Math.max(-50, Math.round(Number(els.trimAllowance.value)) || 0));
-    const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 8);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 30);
+    const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 3600);
+    const t2 = Math.max(1, Number(els.timeLimit2.value) || 3600);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       setStatus("母卷寬度必須是正整數。", "error");

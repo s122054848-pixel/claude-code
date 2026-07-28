@@ -721,7 +721,7 @@ function readLengthList(ids) {
 // the absolute worst case for round1+round2 combined is 6 * cap; default
 // 12s keeps that at 72s.
 async function runTubePlan(demand, widths) {
-  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 12);
+  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 3600);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
