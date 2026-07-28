@@ -22,6 +22,16 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 
+def _safe_float(value):
+    """float(value), or None if blank/invalid -- ERP extracts occasionally have empty
+    width_mm/length_mm/thickness_mm/qty_box cells, and those rows should be skipped like
+    any other bad-dimension row rather than crashing the whole report."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def haversine_km(p1, p2):
     R = 6371.0
     lat1, lng1 = map(math.radians, p1)
@@ -155,9 +165,9 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # Build stack units: one physical "stack" = boxes piled to (near) truck height, footprint w x l
     stacks = []
     for r in rows:
-        qty = float(r["qty_box"])
-        w = float(r["width_mm"]); l = float(r["length_mm"]); t = float(r["thickness_mm"])
-        if w <= 0 or l <= 0 or t <= 0 or qty <= 0:
+        qty = _safe_float(r["qty_box"])
+        w = _safe_float(r["width_mm"]); l = _safe_float(r["length_mm"]); t = _safe_float(r["thickness_mm"])
+        if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
             continue
         boxes_per_stack = max(1, math.floor(truck_h / t))
         lat = (r.get("ship_lat") or "").strip()
@@ -171,6 +181,8 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "cust_name": r["ship_cust_name"].strip(),
                 "lat": float(lat) if lat else None,
                 "lng": float(lng) if lng else None,
+                "route": (r.get("route") or "").strip() or None,
+                "main_road": (r.get("main_road") or "").strip() or None,
                 "item_code": r["item_code"],
                 "boxes": n, "w": w, "l": l, "t": t, "height": n * t,
             })
@@ -221,13 +233,20 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     for s in stacks:
         cust_name_by_code.setdefault(s["cust_code"], s["cust_name"])
 
+    cust_route_by_code = {}
+    cust_main_road_by_code = {}
+    for s in stacks:
+        cust_route_by_code.setdefault(s["cust_code"], s["route"])
+        cust_main_road_by_code.setdefault(s["cust_code"], s["main_road"])
+
     def new_truck():
-        return {"rows": [], "cur_x": 0.0}
+        return {"rows": [], "cur_x": 0.0, "route": None, "main_road": None}
 
     def clone_truck(truck):
         return {
             "rows": [dict(r, items=list(r["items"])) for r in truck["rows"]],
             "cur_x": truck["cur_x"],
+            "route": truck["route"], "main_road": truck["main_road"],
         }
 
     def try_place(truck, stack):
@@ -274,6 +293,76 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 best = d
         return best if best is not None else 0.0
 
+    # 路線(occ735)/主幹道(occ734): the ERP's own pre-assigned delivery route is a more precise
+    # grouping than plain geographic proximity when a customer actually has one, set by the
+    # people who actually plan these routes. Only ~21% of customers have a route code though,
+    # so a truck locks to whichever grouping mode its FIRST customer determines: "" here means
+    # locked to the route-less/open mode (falls back to the plain proximity-only matching this
+    # packer always had), any other value means locked to that specific route. The two
+    # groupings never mix in one truck.
+    def grouping_compatible(truck, cust_code):
+        route = cust_route_by_code.get(cust_code)
+        if truck["route"] is None:
+            return True  # empty so far -- anyone can start it; locking happens in lock_truck_grouping
+        if truck["route"] == "":
+            return not route  # open-mode truck: only route-less customers
+        return route == truck["route"]
+
+    def lock_truck_grouping(truck, cust_code):
+        if truck["route"] is not None:
+            return
+        route = cust_route_by_code.get(cust_code)
+        if route:
+            truck["route"] = route
+            truck["main_road"] = cust_main_road_by_code.get(cust_code)
+        else:
+            truck["route"] = ""
+
+    def trucks_grouping_compatible(a, b):
+        if a["route"] == "" or b["route"] == "":
+            return a["route"] == b["route"]
+        if a["route"] == b["route"]:
+            return True
+        # 路線未成車的再按主幹道相同的排車: different specific routes can still combine if they
+        # share the same 主幹道 (highway corridor) -- this only ever fires for trucks that still
+        # have physical room for each other (checked below), so a route that already filled a
+        # truck on its own never gets merged into anything else regardless.
+        return bool(a["main_road"]) and a["main_road"] == b["main_road"]
+
+    def consolidate_trucks(trucks):
+        """Best-fit-decreasing (even customer-atomic) is still a single forward pass: by the
+        time a small, late-processed customer is placed, an earlier truck can look "full
+        enough" to reject them even though, in hindsight, two separate under-filled trucks
+        could have been one truck all along. This pass looks for exactly that after the fact --
+        any two grouping-compatible trucks where ALL of one truck's stacks fit into the other --
+        and merges them, repeating (always trying the least-full-by-volume truck first, since
+        it's the best candidate to be fully absorbed) until no more merges are possible."""
+        merged = True
+        while merged:
+            merged = False
+            trucks.sort(key=truck_cargo_vol)
+            for i, donor in enumerate(trucks):
+                donor_stacks = [it for row in donor["rows"] for it in row["items"]]
+                for j, host in enumerate(trucks):
+                    if i == j or not trucks_grouping_compatible(donor, host):
+                        continue
+                    trial = clone_truck(host)
+                    ok = True
+                    for it in donor_stacks:
+                        stack = {k: v for k, v in it.items() if k not in ("x", "y", "dx", "dy")}
+                        if not try_place(trial, stack):
+                            ok = False
+                            break
+                    if not ok:
+                        continue
+                    trucks[j] = trial
+                    del trucks[i]
+                    merged = True
+                    break
+                if merged:
+                    break
+        return trucks
+
     # Best-fit-decreasing bin packing, applied at the CUSTOMER level (never split a customer's
     # order across trucks unless it doesn't fit even a single empty one): each customer's whole
     # stack list is tried against every existing truck, and committed to whichever truck can
@@ -297,6 +386,8 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         cust_code = cust_stacks[0]["cust_code"]
         best_idx, best_state, best_bucket, best_prox = -1, None, None, None
         for i, truck in enumerate(trucks):
+            if not grouping_compatible(truck, cust_code):
+                continue
             trial = clone_truck(truck)
             ok = True
             for s in cust_stacks:
@@ -312,6 +403,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 best_idx, best_state, best_bucket, best_prox = i, trial, bucket, prox
         if best_idx >= 0:
             trucks[best_idx] = best_state
+            lock_truck_grouping(trucks[best_idx], cust_code)
             continue
 
         # no existing truck can take the whole customer -- try a brand new (empty) truck
@@ -324,6 +416,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 break
         if fresh_ok:
             trucks.append(fresh)
+            lock_truck_grouping(fresh, cust_code)
             continue
 
         # doesn't fit any single truck even empty -- this customer's own order genuinely
@@ -332,10 +425,14 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         for s in cust_stacks:
             if not try_place(cur, s):
                 trucks.append(cur)
+                lock_truck_grouping(cur, cust_code)
                 cur = new_truck()
                 if not try_place(cur, s):
                     raise RuntimeError(f"stack too large for an empty truck: {s}")
         trucks.append(cur)
+        lock_truck_grouping(cur, cust_code)
+
+    trucks = consolidate_trucks(trucks)
 
     truck_out = []
     for ti, t in enumerate(trucks, start=1):

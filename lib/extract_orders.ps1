@@ -25,6 +25,12 @@
   confirmed orders. These aren't real outbound deliveries, so they don't belong in dispatch
   planning at all.
 
+  occ735 = 路線 (a named delivery route/zone the logistics team already assigns per customer,
+  e.g. "01斗六" -- customers sharing one route code cluster tightly by coordinates, verified
+  against real data) and occ734 = 主幹道 (the broader highway corridor multiple routes can
+  share, e.g. "國3->台1嘉"). Only ~21%/~17% of customers have these set; build_dispatch.py
+  falls back to geography-only grouping for customers without one.
+
   Must run under 32-bit PowerShell (the installed Informix ODBC driver is 32-bit only):
     C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -Date 2026-07-08
 
@@ -61,6 +67,7 @@ $cmd.CommandText = @"
 SELECT
   a.oea01 AS order_no, a.oea02 AS order_date, a.oea04 AS ship_cust_code,
   o.occ02 AS ship_cust_name, o.occ732 AS ship_lat, o.occ733 AS ship_lng,
+  o.occ735 AS route, o.occ734 AS main_road,
   b.oeb04 AS item_code, b.oeb12 AS qty_box, b.oeb03 AS line_no,
   v.utv112 AS width_mm, v.utv113 AS length_mm, v.utv119 AS thickness_mm
 FROM oea_file a, oeb_file b, utu_file u, utv_file v, occ_file o
@@ -98,7 +105,7 @@ function CsvField($v) {
 }
 
 $sw = New-Object System.IO.StreamWriter($OutCsv, $false, [System.Text.Encoding]::UTF8)
-$sw.WriteLine("order_no,order_date,ship_cust_code,ship_cust_name,ship_lat,ship_lng,item_code,qty_box,width_mm,length_mm,thickness_mm")
+$sw.WriteLine("order_no,order_date,ship_cust_code,ship_cust_name,ship_lat,ship_lng,route,main_road,item_code,qty_box,width_mm,length_mm,thickness_mm")
 $excludedCount = 0
 foreach ($row in $dt.Rows) {
     $key = "$($row['order_no'].ToString().Trim())|$($row['line_no'])"
@@ -107,6 +114,7 @@ foreach ($row in $dt.Rows) {
         (CsvField $row["order_no"]), (CsvField $row["order_date"]),
         (CsvField $row["ship_cust_code"]), (CsvField $row["ship_cust_name"]),
         (CsvField $row["ship_lat"]), (CsvField $row["ship_lng"]),
+        (CsvField $row["route"]), (CsvField $row["main_road"]),
         (CsvField $row["item_code"]), (CsvField $row["qty_box"]),
         (CsvField $row["width_mm"]), (CsvField $row["length_mm"]), (CsvField $row["thickness_mm"])
     )
