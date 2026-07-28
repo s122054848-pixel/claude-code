@@ -931,31 +931,12 @@ function getHighsInline() {
 // quite loose - so a nominal 0.05% tolerance can translate into a much
 // larger real shortfall against the true achievable optimum (observed: a
 // solve reported "Optimal" 7 pieces (~1.1%) short of a demonstrably
-// achievable total). Set to 0 (exact optimality, no early stopping) by
-// default so an "Optimal" status is always trustworthy; callers relying on
-// this pay for it with longer solve times and should size their time_limit
-// accordingly. ROUND1_ZERO_GAP is the one deliberate exception: when the
-// Round1 大規格比例 slider is 0%, none of the problem gets the cheaper
-// large-width sequential decomposition, so Round2 has to solve the entire
-// (much bigger, much harder) problem in one MIP - exact solving there can
-// run for many minutes with little benefit, so that specific case trades
-// back to a small tolerance - and since even a relaxed tolerance still
-// needs the solver's proven bound to tighten enough to trigger it (not
-// just a good incumbent), that case also gets its own time_limit sized to
-// the problem instead of reusing whatever the user set for the (normally
-// exact) general case.
+// achievable total). Set to 0 (exact optimality, no early stopping) so an
+// "Optimal" status is always trustworthy, uniformly for every stage and
+// every Round1 大規格比例 setting - no special-cased tolerance. Slower
+// instances rely on the user-editable time-limit fields (and the hard
+// timeout safety net below) rather than a relaxed gap.
 const MIP_REL_GAP = 0;
-const ROUND1_ZERO_GAP_REL_GAP = 0.0002;
-
-// Picks a time_limit for the round1PctValue<=0 fallback path, scaled to
-// how big the pattern set is (a proxy for how hard the MIP is likely to
-// be) instead of reusing the user's general-purpose time limit. Bounded to
-// [30s, 300s] - large enough to give small/medium problems a real shot at
-// closing the gap, small enough that a huge pattern set doesn't turn into
-// an open-ended wait.
-function autoRound2TimeLimit(patternCount) {
-  return Math.min(300, Math.max(30, Math.round(patternCount / 10)));
-}
 
 // HiGHS's own time_limit option is supposed to bound how long a solve
 // takes, but it's only checked at internal B&B node boundaries - on hard
@@ -1017,9 +998,8 @@ function resetWorker() {
   workerPending.clear();
 }
 
-async function solveLP(lpText, timeLimitSec, gapOverride) {
-  const gap = gapOverride != null ? gapOverride : MIP_REL_GAP;
-  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: gap };
+async function solveLP(lpText, timeLimitSec) {
+  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
       return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
@@ -1244,40 +1224,26 @@ async function runPipeline(mode) {
     // count is minimal for whatever floor was handed to it.
     let round2FloorStatus = "N/A";
     let round2Status = "N/A";
-    // Round1 大規格比例=0% means Round1 did nothing (see round1Count above),
-    // so Round2 alone has to solve the entire, much bigger problem in one
-    // MIP - relax to a small tolerance there specifically, instead of the
-    // exact gap=0 used everywhere else, so it actually finishes in
-    // reasonable time.
-    const round2Gap = round1PctValue <= 0 ? ROUND1_ZERO_GAP_REL_GAP : undefined;
-    let round2TimeLimit = t2;
     if (remainingWidths.length > 0) {
       setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy", t2);
       await yieldToUI();
       const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces, trimAllowance);
       if (round2Patterns.length > 0) {
-        round2TimeLimit = round1PctValue <= 0 ? autoRound2TimeLimit(round2Patterns.length) : t2;
         const round2PatternCounts = round2Patterns.map(patternToCounts);
         const round2PatternsFull = round2Patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
         const lpR2a = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
           mode: "max_fulfill",
           minBatch,
         });
-        setStatus(
-          `Round2：對剩餘規格求解最高排抄率中（最多 ${round2TimeLimit} 秒）...`,
-          "busy",
-          round2TimeLimit
-        );
-        await yieldToUI();
-        const solR2a = await solveLP(lpR2a, round2TimeLimit, round2Gap);
+        const solR2a = await solveLP(lpR2a, t2);
         const round2Floor = solR2a && Number.isFinite(solR2a.ObjectiveValue) ? Math.round(solR2a.ObjectiveValue) : 0;
         round2FloorStatus = solR2a ? solR2a.Status : "Failed";
 
         if (round2Floor > 0) {
           setStatus(
-            `Round2：最高排抄率為 ${round2Floor} 件（狀態：${round2FloorStatus}）。求解最少母卷數中（最多 ${round2TimeLimit} 秒）...`,
+            `Round2：最高排抄率為 ${round2Floor} 件（狀態：${round2FloorStatus}）。求解最少母卷數中（最多 ${t2} 秒）...`,
             "busy",
-            round2TimeLimit
+            t2
           );
           await yieldToUI();
           const lpR2b = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
@@ -1285,7 +1251,7 @@ async function runPipeline(mode) {
             fulfillFloor: round2Floor,
             minBatch,
           });
-          const solR2b = await solveLP(lpR2b, round2TimeLimit, round2Gap);
+          const solR2b = await solveLP(lpR2b, t2);
           let extR2 = extractPatternSolution(solR2b, round2PatternsFull, remainingWidths);
           if (extR2.totalProduced < round2Floor - 0.5) {
             extR2 = extractPatternSolution(solR2a, round2PatternsFull, remainingWidths);
@@ -1342,9 +1308,7 @@ async function runPipeline(mode) {
       priorityStatus:
         `Round1：${round1WidthsDesc.length} 規格大到小組合，最少母卷數${round1RollsStatus}` +
         (round1NonOptimalCount > 0 ? `（${round1NonOptimalCount} 個規格未證明達到最優，其排產量可能可再提升）` : ""),
-      rollsStatus:
-        `Round2：${remainingWidths.length} 規格，最大排產量${round2FloorStatus}／最少母卷數${round2Status}` +
-        (round2Gap != null ? `（容忍度 ${(round2Gap * 100).toFixed(2)}%，每階段時限 ${round2TimeLimit} 秒，系統自動設定）` : ""),
+      rollsStatus: `Round2：${remainingWidths.length} 規格，最大排產量${round2FloorStatus}／最少母卷數${round2Status}`,
     });
     renderPlanTable(sequencedRows, motherWidth);
     renderFulfillTable(widths, demand, produced);
