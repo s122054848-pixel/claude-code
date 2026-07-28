@@ -20,6 +20,11 @@
   line_no) in PowerShell instead. Without this exclusion, a line that's already left the
   plant would still show up asking to be put on a NEW truck.
 
+  Also excludes 備庫訂單 (stock/reserve-warehouse orders): the 3rd character of the order
+  number (oea01) is 'B' for these (e.g. UTB-TB0001) -- verified against real data, ~0.32% of
+  confirmed orders. These aren't real outbound deliveries, so they don't belong in dispatch
+  planning at all.
+
   Must run under 32-bit PowerShell (the installed Informix ODBC driver is 32-bit only):
     C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -Date 2026-07-08
 
@@ -61,6 +66,7 @@ SELECT
 FROM oea_file a, oeb_file b, utu_file u, utv_file v, occ_file o
 WHERE a.oea02 = $mdy
   AND a.oeaconf = 'Y'
+  AND SUBSTR(a.oea01,3,1) <> 'B'
   AND a.oea01 = b.oeb01
   AND a.oea40 = u.utu01
   AND u.utu01 = v.utv00
