@@ -33,6 +33,8 @@ cd C:\Bernard\IT\Claude\dispatch-planner
 
 大部分人不需要看這節——直接拿別人已經產生好的 `dispatch_<date>.html`/`.xlsx` 報表來看就好,那些是純靜態檔案,不需要裝任何東西、不需要DSN。只有想在**自己的電腦上直接跑 `run.ps1`/`RunReport.hta` 查ERP**的人才需要照著下面步驟裝一次。
 
+**快速安裝**:拿到 `dispatch-planner-<date>.zip`(見下方「打包工具給別人」)解壓縮後,直接執行 `.\Install.ps1`,它會自動做完下面第2、3、5、6步(檢查Python套件、互動輸入config.json、建立ODBC DSN),只有第4步(裝Informix Client-SDK,廠商安裝程式)沒辦法自動化、需要跟IT要安裝檔。中斷了(例如要先去裝Client-SDK)可以直接重新執行 `.\Install.ps1`,已完成的步驟會自動跳過。下面是完整的手動步驟,供想了解細節或 `Install.ps1` 遇到問題時對照。
+
 1. **複製整個 `dispatch-planner` 資料夾**到這台電腦(或用 `git clone` 這個repo)。
 2. **安裝 Python 3**(64-bit 即可,只有裝箱演算法和報表產生用得到,不碰資料庫):在一般(64-bit)PowerShell視窗確認 `python --version`能跑。
 3. **安裝 Python 套件**:
@@ -50,12 +52,28 @@ cd C:\Bernard\IT\Claude\dispatch-planner
    這支腳本會讀 `config.json` 裡剛填的位址,把ERP主機代號寫進機器的 Informix 設定,並建立對應的ODBC DSN。DSN本身**不會**存帳號密碼,密碼只放在你自己的 `config.json`,腳本永遠不會碰到你的密碼。重複執行是安全的。
 7. **測試**:`.\run.ps1 -Date <隨便一個最近的日期> -Open`,或直接雙擊 `RunReport.hta`。跑成功、瀏覽器跳出報表,就代表這台電腦裝好了。
 
+## 打包工具給別人(維護者用)
+
+要把整套工具交給新用戶(例如另一個廠區的同事),在專案根目錄執行:
+
+```powershell
+.\Package.ps1
+```
+
+會用 `git archive` 把目前 git 已commit的內容打包成 `output\dispatch-planner-<date>.zip`。用 `git archive` 而不是手動列清單的好處是它自動只抓git有追蹤的檔案——`config.json`(真實密碼)、`output\` 底下的訂單/報表資料、`.git\` 本身都不會進去,以後專案新增檔案也不用記得回來改打包清單,只要記得該不該讓這個檔案進git就好。
+
+把產生的zip傳給新用戶(通訊軟體、共用資料夾都可以),對方解壓縮後照上面「給新用戶安裝」的**快速安裝**執行 `.\Install.ps1` 即可。
+
+⚠️ 執行前如果有還沒commit的變更,`Package.ps1` 會印出警告——打包的內容永遠是**已commit**的版本,不是工作目錄目前的樣子。
+
 ## 專案結構
 
 ```
 dispatch-planner/
   RunReport.hta             雙擊執行的小視窗(一般人用這個,內部會呼叫 run.ps1)
   run.ps1                   命令列主要進入點
+  Install.ps1               新電腦一鍵安裝精靈,見上方「給新用戶安裝」快速安裝
+  Package.ps1               打包成zip交給新用戶用,見上方「打包工具給別人」
   config.json               連線資訊 + 預設車台尺寸(實際使用,含密碼)
   config.example.json       範本(密碼是佔位字串,不含真實密碼)
   requirements.txt          Python套件清單(pip install -r requirements.txt)
