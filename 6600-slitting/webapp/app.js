@@ -751,15 +751,19 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // returns is automatically safe to use - "not proven minimal" just means
 // the pattern count might be a bit more than the true best, never a real
 // production regression. That makes it safe to cap this stage's own
-// budget well below the general time-limit field: measured on a real
-// 57-pattern instance, the incumbent improves fast at first (57->33
-// within 10s) and then plateaus hard (90s and 120s both land on 31) -
-// most of the value shows up in the first ~30s, and grinding longer
-// mostly just proves a bound nobody's waiting on. Capped at 30s
-// regardless of the caller's time_limit (but never above it, so a
-// deliberately shorter field value is still respected). Falls back to
-// the input unchanged if it can't find an equally-good solution in time.
-const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 30;
+// budget well below the general time-limit field. Measured on a real
+// 57-pattern instance: 10s and 30s land on the exact same incumbent
+// (33), and even 90s/120s only creep to 31 - almost all the value shows
+// up in the first ~10s, so there's no real reason to budget for more.
+// (A from-scratch greedy elimination heuristic - repeatedly try dropping
+// the cheapest pattern and re-solving the smaller remainder as a plain
+// LP - was also tried as a faster alternative: it converged in ~2.5s but
+// only reached 36, worse than this MIP's 33, so it wasn't adopted.)
+// Capped at 15s regardless of the caller's time_limit (but never above
+// it, so a deliberately shorter field value is still respected). Falls
+// back to the input unchanged if it can't find an equally-good solution
+// in time.
+const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 15;
 
 async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
