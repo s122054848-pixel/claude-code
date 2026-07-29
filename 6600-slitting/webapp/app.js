@@ -995,21 +995,18 @@ function getHighsInline() {
 // timeout safety net below) rather than a relaxed gap.
 const MIP_REL_GAP = 0;
 
-// HiGHS keeps branching until it can *prove* optimality (matching
-// MIP_REL_GAP=0 above), which on a hard instance can mean grinding through
-// the full time_limit even once further improvement is very unlikely.
-// mip_max_stall_nodes caps how many consecutive unpromising nodes (worse
-// than the current best) it will explore before giving up and returning
-// its best incumbent early, rather than waiting for the clock to run out.
-// Tuned empirically on a hard 37-width/628-demand instance: node budgets
-// of 3+ made no difference (still ran the full 300s), while 0-1 cut it to
-// ~120s for a ~0.3% worse result (617 vs 619 pieces) - the underlying
-// search just doesn't have a smooth "diminishing returns" middle ground on
-// this problem shape, so this is a real quality/speed trade, not a free
-// win. Reported status naturally becomes "Unknown" instead of "Optimal" or
-// "Time limit reached" when this triggers - already handled by the
-// existing non-"Optimal" fallback/reporting paths.
-const MIP_MAX_STALL_NODES = 1;
+// An earlier attempt used HiGHS's mip_max_stall_nodes to give up early once
+// the search stops finding improving incumbents, instead of waiting for the
+// full time_limit. Reverted: on a second real-world dataset (a 35-width/
+// 1127-demand production order), a stall budget of 1 caused a genuine,
+// materially worse result on Round2's max_fulfill stage (some runs settled
+// for as few as 898 pieces when at least 1014-1018 was reachable within the
+// same time budget without any stall limit at all) - and the outcome varied
+// significantly run-to-run for the identical input, since how quickly a
+// search "looks stalled" depends on the exact (non-deterministic) B&B path
+// taken. That's an unacceptable trade for a planning tool: it isn't just
+// slower-but-honest, it's silently unreliable. time_limit + the hard
+// timeout safety net below remain the only way a solve stops early.
 
 // HiGHS's own time_limit option is supposed to bound how long a solve
 // takes, but it's only checked at internal B&B node boundaries - on hard
@@ -1072,12 +1069,7 @@ function resetWorker() {
 }
 
 async function solveLP(lpText, timeLimitSec) {
-  const options = {
-    time_limit: timeLimitSec,
-    output_flag: false,
-    mip_rel_gap: MIP_REL_GAP,
-    mip_max_stall_nodes: MIP_MAX_STALL_NODES,
-  };
+  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
       return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
