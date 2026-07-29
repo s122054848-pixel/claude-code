@@ -337,6 +337,14 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
       for (const key in counts) {
         U = Math.min(U, Math.floor((demand[key] || 0) / counts[key]));
       }
+      // No single pattern's count can exceed the total roll cap either -
+      // tightening the "big-M" bound this way doesn't cut off any feasible
+      // solution (it's already implied by c_rollcap + x>=0), but a looser
+      // bound here directly weakens the LP relaxation the MIP solver
+      // branches against, so this can materially speed up how fast it
+      // closes the gap - most useful for min_types, where U from demand
+      // alone is often much larger than the roll cap.
+      if (opts.rollCap != null) U = Math.min(U, opts.rollCap);
       upperBound[i] = U;
       if (minBatch > 1 && U < minBatch) continue;
     }
