@@ -664,20 +664,43 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // runs one more solve, capped at the roll count already achieved (never
 // allowed to regress it) and requiring at least the fulfillment already
 // achieved, that instead minimizes how many distinct patterns are used -
-// fewer setups on the machine for the same output. If it can't find an
-// equally-good solution in time, falls back to the input unchanged rather
-// than risking a worse result.
-async function minimizeTypeCount(patterns, patternCounts, widths, demand, baseOpts, patternsFull, rows, produced, timeLimitSec) {
+// fewer setups on the machine for the same output.
+//
+// Searching over every pattern the mother width could generate turns this
+// into a cardinality-minimization MIP over hundreds of 0/1 variables - an
+// NP-hard problem that can take many minutes to *prove* minimal even
+// though a good incumbent shows up almost instantly. Restricting the
+// candidate pool to just the patterns the roll-minimizing stage actually
+// used (rows) - typically a few dozen, not several hundred - helps ("can
+// any pattern I'm already committed to be dropped by shifting its volume
+// onto the others I'm already running?" instead of searching from
+// scratch), but on its own still isn't enough to make *proving* the exact
+// minimum fast.
+//
+// Unlike max_fulfill/min_rolls, an unproven answer here carries no real
+// risk: every candidate this LP considers already satisfies the roll cap
+// and fulfillment floor as hard constraints, so any feasible solution it
+// returns is automatically safe to use - "not proven minimal" just means
+// the pattern count might be a couple more than the true best, not that
+// real output could regress. That makes a loose optimality gap
+// (mip_abs_gap=2, i.e. stop once within 2 pattern-types of the proven
+// bound) an easy, low-risk way to turn a multi-minute search into a
+// few-second one. Falls back to the input unchanged if it can't find an
+// equally-good solution in time.
+async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
   if (totalRolls <= 0) return { rows, produced, status: "N/A" };
   const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
-  const lp = buildLP(patterns, patternCounts, widths, demand, {
+  const activePatterns = rows.map((r) => r.items);
+  const activePatternCounts = activePatterns.map(patternToCounts);
+  const activePatternsFull = rows.map((r) => ({ items: r.items }));
+  const lp = buildLP(activePatterns, activePatternCounts, widths, demand, {
     ...baseOpts,
     mode: "min_types",
     rollCap: totalRolls,
   });
-  const sol = await solveLP(lp, timeLimitSec);
-  const ext = extractPatternSolution(sol, patternsFull, widths);
+  const sol = await solveLP(lp, timeLimitSec, { mip_abs_gap: 2 });
+  const ext = extractPatternSolution(sol, activePatternsFull, widths);
   const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
   if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
     return { rows: ext.rows, produced: ext.produced, status: sol.Status };
@@ -744,12 +767,9 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
   setStatus(`${tag}：最小化組合種類數中（最多 ${t2} 秒）...`, "busy", t2);
   await yieldToUI();
   const typesResult = await minimizeTypeCount(
-    itemsList,
-    counts,
     widths,
     demand,
     { fulfillFloor, perWidthFloor: priorityFloor },
-    patternsFull,
     ext.rows,
     ext.produced,
     t2
@@ -974,8 +994,13 @@ function resetWorker() {
   workerPending.clear();
 }
 
-async function solveLP(lpText, timeLimitSec) {
-  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
+async function solveLP(lpText, timeLimitSec, optionOverrides) {
+  const options = {
+    time_limit: timeLimitSec,
+    output_flag: false,
+    mip_rel_gap: MIP_REL_GAP,
+    ...optionOverrides,
+  };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
       return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
