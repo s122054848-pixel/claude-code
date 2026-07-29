@@ -321,24 +321,32 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
   const nPat = patterns.length;
   const minBatch = opts.minBatch || 0;
   const weightFn = opts.weightFn || (() => 1);
+  // "min_types" (minimize how many distinct patterns are used, e.g. after
+  // rolls are already minimized) needs the same x_i<=U_i*y_i "is this
+  // pattern used at all" linkage that minBatch semi-continuity uses, but
+  // for every pattern, not just when minBatch>1.
+  const useTypeBinary = minBatch > 1 || opts.mode === "min_types";
   const lines = [];
 
   const activeIdx = [];
   const upperBound = new Array(nPat);
   for (let i = 0; i < nPat; i++) {
-    if (minBatch > 1) {
+    if (useTypeBinary) {
       let U = Infinity;
       const counts = patternCounts[i];
       for (const key in counts) {
         U = Math.min(U, Math.floor((demand[key] || 0) / counts[key]));
       }
       upperBound[i] = U;
-      if (U < minBatch) continue;
+      if (minBatch > 1 && U < minBatch) continue;
     }
     activeIdx.push(i);
   }
 
-  if (opts.mode === "min_rolls") {
+  if (opts.mode === "min_types") {
+    lines.push("Minimize");
+    lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `y${i}`).join(" + ") : "0"));
+  } else if (opts.mode === "min_rolls") {
     lines.push("Minimize");
     lines.push(" obj: " + (activeIdx.length ? activeIdx.map((i) => `x${i}`).join(" + ") : "0"));
   } else {
@@ -389,17 +397,24 @@ function buildLP(patterns, patternCounts, widths, demand, opts) {
     }
   }
 
-  if (minBatch > 1) {
+  if (opts.rollCap != null) {
+    const rollTerms = activeIdx.length ? activeIdx.map((i) => `x${i}`).join(" + ") : "0 dummy";
+    lines.push(` c_rollcap: ${rollTerms} <= ${opts.rollCap}`);
+  }
+
+  if (useTypeBinary) {
     for (const i of activeIdx) {
       lines.push(` cub_${i}: x${i} - ${upperBound[i]} y${i} <= 0`);
-      lines.push(` clb_${i}: x${i} - ${minBatch} y${i} >= 0`);
+      if (minBatch > 1) {
+        lines.push(` clb_${i}: x${i} - ${minBatch} y${i} >= 0`);
+      }
     }
   }
 
   lines.push("General");
   lines.push(activeIdx.map((i) => `x${i}`).join(" "));
 
-  if (minBatch > 1) {
+  if (useTypeBinary) {
     lines.push("Binary");
     lines.push(activeIdx.map((i) => `y${i}`).join(" "));
   }
@@ -643,6 +658,33 @@ function extractPatternSolution(sol, patternsFull, widths) {
   return { rows, produced, totalProduced };
 }
 
+// A min_rolls solve only minimizes the *total* roll count - many different
+// pattern combinations can tie for that same total, and it has no
+// preference among them for how many distinct patterns make it up. This
+// runs one more solve, capped at the roll count already achieved (never
+// allowed to regress it) and requiring at least the fulfillment already
+// achieved, that instead minimizes how many distinct patterns are used -
+// fewer setups on the machine for the same output. If it can't find an
+// equally-good solution in time, falls back to the input unchanged rather
+// than risking a worse result.
+async function minimizeTypeCount(patterns, patternCounts, widths, demand, baseOpts, patternsFull, rows, produced, timeLimitSec) {
+  const totalRolls = rows.reduce((s, r) => s + r.count, 0);
+  if (totalRolls <= 0) return { rows, produced, status: "N/A" };
+  const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
+  const lp = buildLP(patterns, patternCounts, widths, demand, {
+    ...baseOpts,
+    mode: "min_types",
+    rollCap: totalRolls,
+  });
+  const sol = await solveLP(lp, timeLimitSec);
+  const ext = extractPatternSolution(sol, patternsFull, widths);
+  const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
+  if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
+    return { rows: ext.rows, produced: ext.produced, status: sol.Status };
+  }
+  return { rows, produced, status: (sol ? sol.Status : "Failed") + "（未找到更少種類的可行解，維持原刀路）" };
+}
+
 // Generic three-stage solve over an arbitrary set of {items, stockLength}
 // patterns - reuses buildLP/solveLP since the LP itself only cares about
 // widths, not the actual stock length:
@@ -654,7 +696,7 @@ function extractPatternSolution(sol, patternsFull, widths) {
 //      roll-count optimization can't trade large-width fulfillment away
 async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
   if (patternsFull.length === 0 || widths.length === 0) {
-    return { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
+    return { solution: [], produced: {}, status1: "N/A", status2: "N/A", status3: "N/A" };
   }
   const tag = label || "紙管";
   const itemsList = patternsFull.map((p) => p.items);
@@ -698,13 +740,28 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
     // which is already known to achieve them.
     ext = extPriority;
   }
-  ext.rows.sort((a, b) => b.count - a.count);
+
+  setStatus(`${tag}：最小化組合種類數中（最多 ${t2} 秒）...`, "busy", t2);
+  await yieldToUI();
+  const typesResult = await minimizeTypeCount(
+    itemsList,
+    counts,
+    widths,
+    demand,
+    { fulfillFloor, perWidthFloor: priorityFloor },
+    patternsFull,
+    ext.rows,
+    ext.produced,
+    t2
+  );
+  const rows = typesResult.rows.slice().sort((a, b) => b.count - a.count);
 
   return {
-    solution: ext.rows,
-    produced: ext.produced,
+    solution: rows,
+    produced: typesResult.produced,
     status1: sol1 ? sol1.Status : "Failed",
     status2: sol2 ? sol2.Status : "Failed",
+    status3: typesResult.status,
   };
 }
 
@@ -741,7 +798,7 @@ async function runTubePlan(demand, widths) {
     remainingDemand[String(w)] = tubeDemand[String(w)] - (round1.produced[String(w)] || 0);
   }
 
-  let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A" };
+  let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A", status3: "N/A" };
   if (remainingWidths.length > 0 && round2Lengths.length > 0) {
     const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Lengths);
     round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeStageCap, tubeStageCap, "Round2");
