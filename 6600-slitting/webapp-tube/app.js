@@ -915,6 +915,12 @@ function getHighsInline() {
 // trustworthy - see webapp/app.js for the full rationale.
 const MIP_REL_GAP = 0;
 
+// Caps how many consecutive unpromising B&B nodes HiGHS will explore
+// before giving up and returning its best incumbent early instead of
+// grinding through the full time_limit - see webapp/app.js for the full
+// rationale and empirical tuning (identical logic, kept in sync).
+const MIP_MAX_STALL_NODES = 1;
+
 // HiGHS's own time_limit option is only checked at internal B&B node
 // boundaries - on hard instances a single node can occasionally run well
 // past that nominal cap, leaving the page waiting indefinitely with no
@@ -969,7 +975,12 @@ function resetWorker() {
 }
 
 async function solveLP(lpText, timeLimitSec) {
-  const options = { time_limit: timeLimitSec, output_flag: false, mip_rel_gap: MIP_REL_GAP };
+  const options = {
+    time_limit: timeLimitSec,
+    output_flag: false,
+    mip_rel_gap: MIP_REL_GAP,
+    mip_max_stall_nodes: MIP_MAX_STALL_NODES,
+  };
   if (!workerBroken && typeof Worker !== "undefined") {
     try {
       return await withHardTimeout(solveInWorker(lpText, options), hardTimeoutMsFor(timeLimitSec));
