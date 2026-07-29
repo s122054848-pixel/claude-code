@@ -734,19 +734,25 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // used (rows) - typically a few dozen, not several hundred - helps ("can
 // any pattern I'm already committed to be dropped by shifting its volume
 // onto the others I'm already running?" instead of searching from
-// scratch), but on its own still isn't enough to make *proving* the exact
-// minimum fast.
+// scratch), but the search still rarely closes the gap and *proves*
+// optimal within any reasonable time.
 //
 // Unlike max_fulfill/min_rolls, an unproven answer here carries no real
 // risk: every candidate this LP considers already satisfies the roll cap
 // and fulfillment floor as hard constraints, so any feasible solution it
 // returns is automatically safe to use - "not proven minimal" just means
-// the pattern count might be a couple more than the true best, not that
-// real output could regress. That makes a loose optimality gap
-// (mip_abs_gap=2, i.e. stop once within 2 pattern-types of the proven
-// bound) an easy, low-risk way to turn a multi-minute search into a
-// few-second one. Falls back to the input unchanged if it can't find an
-// equally-good solution in time.
+// the pattern count might be a bit more than the true best, never a real
+// production regression. That makes it safe to cap this stage's own
+// budget well below the general time-limit field: measured on a real
+// 57-pattern instance, the incumbent improves fast at first (57->33
+// within 10s) and then plateaus hard (90s and 120s both land on 31) -
+// most of the value shows up in the first ~30s, and grinding longer
+// mostly just proves a bound nobody's waiting on. Capped at 30s
+// regardless of the caller's time_limit (but never above it, so a
+// deliberately shorter field value is still respected). Falls back to
+// the input unchanged if it can't find an equally-good solution in time.
+const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 30;
+
 async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
   if (totalRolls <= 0) return { rows, produced, status: "N/A" };
@@ -759,7 +765,8 @@ async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeL
     mode: "min_types",
     rollCap: totalRolls,
   });
-  const sol = await solveLP(lp, timeLimitSec, { mip_abs_gap: 2 });
+  const cappedTimeLimit = Math.min(timeLimitSec, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+  const sol = await solveLP(lp, cappedTimeLimit, { mip_abs_gap: 2 });
   const ext = extractPatternSolution(sol, activePatternsFull, widths);
   const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
   if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
@@ -824,7 +831,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
     ext = extPriority;
   }
 
-  setStatus(`${tag}：最小化組合種類數中（最多 ${t2} 秒）...`, "busy", t2);
+  const typesCap = Math.min(t2, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+  setStatus(`${tag}：最小化組合種類數中（最多 ${typesCap} 秒）...`, "busy", typesCap);
   await yieldToUI();
   const typesResult = await minimizeTypeCount(
     widths,
@@ -1301,7 +1309,8 @@ async function runPipeline(mode) {
       round1Produced = extR1.produced;
       round1RollsStatus = solR1Rolls ? solR1Rolls.Status : "Failed";
 
-      setStatus(`Round1：最小化刀路種類數中（最多 ${t2} 秒）...`, "busy", t2);
+      const round1TypesCap = Math.min(t2, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+      setStatus(`Round1：最小化刀路種類數中（最多 ${round1TypesCap} 秒）...`, "busy", round1TypesCap);
       await yieldToUI();
       const r1Types = await minimizeTypeCount(
         widths,
@@ -1371,7 +1380,8 @@ async function runPipeline(mode) {
           round2Produced = extR2.produced;
           round2Status = solR2b ? solR2b.Status : "Failed";
 
-          setStatus(`Round2：最小化刀路種類數中（最多 ${t2} 秒）...`, "busy", t2);
+          const round2TypesCap = Math.min(t2, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+          setStatus(`Round2：最小化刀路種類數中（最多 ${round2TypesCap} 秒）...`, "busy", round2TypesCap);
           await yieldToUI();
           const r2Types = await minimizeTypeCount(
             remainingWidths,
