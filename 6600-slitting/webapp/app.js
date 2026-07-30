@@ -125,6 +125,16 @@ els.trimAllowance.addEventListener("input", () => {
   els.trimAllowanceValue.textContent = `${els.trimAllowance.value}mm`;
 });
 
+// Deep search only has a chance of improving on the fast-mode result if
+// the underlying max_fulfill/min_rolls stages themselves converge to
+// Optimal first (see the deepSearchMinTypes rationale below) - a 60s
+// min-rolls budget is often not enough for that on harder datasets, so
+// bump it to 300s when deep search is turned on, and back to 60s when
+// turned off, rather than leaving it on the user to remember to do so.
+els.deepSearchTypes.addEventListener("change", () => {
+  els.timeLimit2.value = els.deepSearchTypes.checked ? 300 : 60;
+});
+
 // A single solve can legitimately take over a minute (harder MIPs with the
 // min-batch-size constraint don't converge quickly), during which only one
 // or two status lines would otherwise change - which can look identical to

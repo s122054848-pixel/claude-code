@@ -129,6 +129,15 @@ for (const id of [
   els[id].addEventListener("change", autoRun);
 }
 
+// Deep search only has a chance of improving on the fast-mode result if
+// the underlying max_fulfill/min_rolls stages themselves converge to
+// Optimal first - a 60s budget is often not enough for that on harder
+// datasets, so bump the shared stage time limit to 300s when deep search
+// is turned on, and back to 60s when turned off.
+els.deepSearchTypes.addEventListener("change", () => {
+  els.tubeStageTimeLimit.value = els.deepSearchTypes.checked ? 300 : 60;
+});
+
 // A single solve can legitimately take tens of seconds, during which only
 // one or two status lines would otherwise change - which can look identical
 // to a frozen/broken page. Show a live elapsed-time counter while busy, plus
