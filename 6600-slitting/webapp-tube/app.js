@@ -711,7 +711,11 @@ async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeL
   const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
   const activePatterns = rows.map((r) => r.items);
   const activePatternCounts = activePatterns.map(patternToCounts);
-  const activePatternsFull = rows.map((r) => ({ items: r.items }));
+  // Keep every field from the original row (e.g. stockLength on tube-plan
+  // patterns), not just items - extractPatternSolution below only
+  // overwrites `count`, so anything else (like stockLength) needs to
+  // already be present or it comes back undefined.
+  const activePatternsFull = rows.map((r) => ({ ...r }));
   const lp = buildLP(activePatterns, activePatternCounts, widths, demand, {
     ...baseOpts,
     mode: "min_types",
