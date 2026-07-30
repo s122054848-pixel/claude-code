@@ -753,9 +753,8 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // pool at all - no amount of searching within that pool could ever have
 // found them, which is why the fast default here caps out around
 // 30-something rather than approaching a human planner's result.) See
-// buildEnrichedPool below for the slower opt-in mode that addresses
-// this by pooling several *different* min_rolls solutions together
-// before minimizing.
+// deepSearchMinTypes below for the slower opt-in mode that addresses
+// this with a much richer candidate pool searched concurrently.
 //
 // Unlike max_fulfill/min_rolls, an unproven answer here carries no real
 // risk: every candidate this LP considers already satisfies the roll cap
@@ -769,80 +768,131 @@ const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
 const DEEP_SEARCH_SAMPLE_SIZE = 200;
 
-// Finds a rich set of alternative candidate patterns via LP sensitivity
-// analysis instead of many repeated MIP re-solves. An earlier version
-// re-solved the same min_rolls problem a dozen times with small random
-// objective perturbations to surface different equally-optimal
-// solutions (each tie-broken differently) - it worked, but cost ~180s of
-// sequential solving. Relaxing the *same* min_rolls problem to a plain
-// LP (dropping the General/Binary declarations - HiGHS only reports a
-// Dual/reduced-cost value per column for LPs, not MIPs) and solving it
-// ONCE gives the same information far faster: every pattern with
-// (near-)zero reduced cost could appear in some equally-optimal
-// solution, all identified in a single sub-second solve (measured:
-// 0.05s on an 803-pattern instance, vs ~180s for 12 re-solves). That set
-// is usually still too large to hand a cardinality-minimizing MIP
-// directly (measured: worse results within the same time budget than a
-// few-hundred-pattern sample), so a random sample of it is used instead
-// - measured to reach the same quality as the 12-re-solve version,
-// roughly 5-8x faster overall.
-async function buildEnrichedPool(patternsFull, patternCounts, widths, demand, baseOpts, initialRows, sampleSize) {
+// Deep search: finds a rich set of alternative candidate patterns via LP
+// sensitivity analysis, then searches it with several concurrent workers
+// instead of one sequential solve.
+//
+// Step 1 - find candidates fast: relaxing the min_rolls problem to a
+// plain LP (dropping the General/Binary declarations - HiGHS only
+// reports a Dual/reduced-cost value per column for LPs, not MIPs) and
+// solving it ONCE identifies every pattern with (near-)zero reduced
+// cost - i.e. every pattern that could appear in some equally-optimal
+// roll-count solution - in a single sub-second solve (measured: 0.05s on
+// an 803-pattern instance, versus ~180s for an earlier version that
+// re-solved the MIP a dozen times with random objective perturbations to
+// get the same information).
+//
+// Step 2 - search it concurrently, not sequentially: that reduced-cost
+// set is usually still too large to hand a cardinality-minimizing MIP
+// directly (measured: worse results within a time budget than a smaller
+// sample), so several *different* random samples of it are dispatched to
+// independent Web Workers at once (verified: N workers finish in ~1x
+// their shared time_limit, not Nx - genuine OS-thread parallelism, even
+// though HiGHS itself has no internal multi-threading in this WASM
+// build) and the best result across all of them is kept. This also fixes
+// the earlier single-sample version's run-to-run unreliability (one run
+// could land on a mediocre sample and show no improvement at all) -
+// trying several samples per run makes getting at least one good one far
+// more likely.
+async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, baseOpts, rows, produced, timeLimitSec) {
+  const totalRolls = rows.reduce((s, r) => s + r.count, 0);
+  const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
   const patterns = patternsFull.map((p) => p.items);
+
   const relaxLp = buildLP(patterns, patternCounts, widths, demand, { ...baseOpts, mode: "min_rolls" });
   const generalIdx = relaxLp.indexOf("\nGeneral");
   const relaxedLp = generalIdx >= 0 ? relaxLp.slice(0, generalIdx) + "\nEnd" : relaxLp;
   const relaxSol = await solveLP(relaxedLp, DEEP_SEARCH_RELAX_TIME_LIMIT_SEC);
 
-  const unionMap = new Map();
-  for (const r of initialRows) unionMap.set(r.items.join(","), r);
+  const initialKeys = new Set(rows.map((r) => r.items.join(",")));
+  const candIdx = [];
   if (relaxSol && relaxSol.Columns) {
-    const candIdx = [];
     for (let i = 0; i < patterns.length; i++) {
       const col = relaxSol.Columns[`x${i}`];
       const key = patterns[i].join(",");
-      if (col && Math.abs(col.Dual) < 1e-6 && !unionMap.has(key)) candIdx.push(i);
-    }
-    for (let i = candIdx.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [candIdx[i], candIdx[j]] = [candIdx[j], candIdx[i]];
-    }
-    for (const i of candIdx.slice(0, sampleSize)) {
-      unionMap.set(patterns[i].join(","), patternsFull[i]);
+      if (col && Math.abs(col.Dual) < 1e-6 && !initialKeys.has(key)) candIdx.push(i);
     }
   }
-  return Array.from(unionMap.values());
+
+  const pool = getWorkerPool();
+  const cappedTimeLimit = Math.min(timeLimitSec, DEEP_SEARCH_TYPES_TIME_LIMIT_SEC);
+  const hardMs = hardTimeoutMsFor(cappedTimeLimit);
+
+  const jobs = pool.map(async (worker) => {
+    const shuffled = candIdx.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const sampledIdx = shuffled.slice(0, DEEP_SEARCH_SAMPLE_SIZE);
+    const poolPatterns = rows.map((r) => r.items).concat(sampledIdx.map((i) => patterns[i]));
+    const poolCounts = poolPatterns.map(patternToCounts);
+    const poolPatternsFull = rows.map((r) => ({ ...r })).concat(sampledIdx.map((i) => patternsFull[i]));
+    const lp = buildLP(poolPatterns, poolCounts, widths, demand, {
+      ...baseOpts,
+      mode: "min_types",
+      rollCap: totalRolls,
+    });
+    let sol;
+    try {
+      sol = await withHardTimeout(
+        solveOnWorker(worker, lp, {
+          time_limit: cappedTimeLimit,
+          output_flag: false,
+          mip_rel_gap: MIP_REL_GAP,
+          mip_abs_gap: 2,
+        }),
+        hardMs
+      );
+    } catch (err) {
+      return null;
+    }
+    const ext = extractPatternSolution(sol, poolPatternsFull, widths);
+    const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
+    if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
+      return { rows: ext.rows, produced: ext.produced, status: sol.Status };
+    }
+    return null;
+  });
+
+  const results = await Promise.all(jobs);
+  let best = null;
+  for (const r of results) {
+    if (r && (!best || r.rows.length < best.rows.length)) best = r;
+  }
+  if (best) return best;
+  return { rows, produced, status: "Failed（未找到更少種類的可行解，維持原刀路）" };
 }
 
 async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec, deepSearch) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
   if (totalRolls <= 0) return { rows, produced, status: "N/A" };
-  const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
-  let poolRows = rows;
   if (deepSearch && deepSearch.patternsFull && deepSearch.patternCounts) {
-    poolRows = await buildEnrichedPool(
+    return deepSearchMinTypes(
       deepSearch.patternsFull,
       deepSearch.patternCounts,
       widths,
       demand,
       baseOpts,
       rows,
-      DEEP_SEARCH_SAMPLE_SIZE
+      produced,
+      timeLimitSec
     );
   }
-  const activePatterns = poolRows.map((r) => r.items);
+  const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
+  const activePatterns = rows.map((r) => r.items);
   const activePatternCounts = activePatterns.map(patternToCounts);
   // Keep every field from the original row (e.g. stockLength on tube-plan
   // patterns), not just items - extractPatternSolution below only
   // overwrites `count`, so anything else (like stockLength) needs to
   // already be present or it comes back undefined.
-  const activePatternsFull = poolRows.map((r) => ({ ...r }));
+  const activePatternsFull = rows.map((r) => ({ ...r }));
   const lp = buildLP(activePatterns, activePatternCounts, widths, demand, {
     ...baseOpts,
     mode: "min_types",
     rollCap: totalRolls,
   });
-  const defaultCap = deepSearch ? DEEP_SEARCH_TYPES_TIME_LIMIT_SEC : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
-  const cappedTimeLimit = Math.min(timeLimitSec, defaultCap);
+  const cappedTimeLimit = Math.min(timeLimitSec, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
   const sol = await solveLP(lp, cappedTimeLimit, { mip_abs_gap: 2 });
   const ext = extractPatternSolution(sol, activePatternsFull, widths);
   const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
@@ -1070,6 +1120,49 @@ function solveInWorker(lpText, options) {
       getWorker().postMessage({ id, lp: lpText, options });
     } catch (err) {
       workerPending.delete(id);
+      reject(err);
+    }
+  });
+}
+
+// A pool of *independent* Workers (each with its own HiGHS-WASM instance),
+// separate from the single `highsWorker` used for the main sequential
+// pipeline above. HiGHS itself has no internal multi-threading in this
+// WASM build, but the browser can genuinely run several Worker instances
+// on separate OS threads at once - used only by deep search's "try
+// several different candidate samples and keep the best" step, where
+// trying more samples in the same wall-clock budget matters more than the
+// mainline pipeline's simplicity. Verified: 4 workers solving 4 different
+// samples concurrently finish in ~1x their shared time_limit, not 4x.
+const WORKER_POOL_SIZE = Math.max(2, Math.min(8, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4));
+let workerPool = null;
+
+function getWorkerPool() {
+  if (!workerPool) {
+    workerPool = [];
+    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+      const blob = new Blob([window.WORKER_BUNDLE_SOURCE], { type: "application/javascript" });
+      const blobUrl = URL.createObjectURL(blob);
+      workerPool.push(new Worker(blobUrl));
+    }
+  }
+  return workerPool;
+}
+
+function solveOnWorker(worker, lpText, options) {
+  return new Promise((resolve, reject) => {
+    const id = `${Date.now()}_${Math.random()}`;
+    const handler = (e) => {
+      if (e.data.id !== id) return;
+      worker.removeEventListener("message", handler);
+      if (e.data.ok) resolve(e.data.sol);
+      else reject(new Error(e.data.error));
+    };
+    worker.addEventListener("message", handler);
+    try {
+      worker.postMessage({ id, lp: lpText, options });
+    } catch (err) {
+      worker.removeEventListener("message", handler);
       reject(err);
     }
   });
