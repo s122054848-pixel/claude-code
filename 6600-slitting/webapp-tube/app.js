@@ -135,7 +135,7 @@ for (const id of [
 // datasets, so bump the shared stage time limit to 300s when deep search
 // is turned on, and back to 60s when turned off.
 els.deepSearchTypes.addEventListener("change", () => {
-  els.tubeStageTimeLimit.value = els.deepSearchTypes.checked ? 300 : 60;
+  els.tubeStageTimeLimit.value = els.deepSearchTypes.checked ? 300 : 45;
 });
 
 // A single solve can legitimately take tens of seconds, during which only

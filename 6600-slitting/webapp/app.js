@@ -132,7 +132,7 @@ els.trimAllowance.addEventListener("input", () => {
 // bump it to 300s when deep search is turned on, and back to 60s when
 // turned off, rather than leaving it on the user to remember to do so.
 els.deepSearchTypes.addEventListener("change", () => {
-  els.timeLimit2.value = els.deepSearchTypes.checked ? 300 : 60;
+  els.timeLimit2.value = els.deepSearchTypes.checked ? 300 : 45;
 });
 
 // A single solve can legitimately take over a minute (harder MIPs with the
