@@ -66,7 +66,6 @@ const els = {
   tubeLen4: document.getElementById("tubeLen4"),
   tubeWasteTol: document.getElementById("tubeWasteTol"),
   tubeStageTimeLimit: document.getElementById("tubeStageTimeLimit"),
-  deepSearchTypes: document.getElementById("deepSearchTypes"),
   tubeR2Len1: document.getElementById("tubeR2Len1"),
   tubeR2Len2: document.getElementById("tubeR2Len2"),
   tubeR2Len3: document.getElementById("tubeR2Len3"),
@@ -678,23 +677,17 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // Searching over every pattern the mother width could generate turns this
 // into a cardinality-minimization MIP over hundreds of 0/1 variables - an
 // NP-hard problem that can take many minutes to *prove* minimal even
-// though a good incumbent shows up almost instantly. By default this
-// restricts the candidate pool to just the patterns the roll-minimizing
-// stage actually used (rows) - typically a few dozen, not several
-// hundred - which keeps the search fast (seconds).
+// though a good incumbent shows up almost instantly.
 //
 // Important caveat, confirmed by comparing against a real human-planned
 // solution for the same order: a plain min_rolls solve is indifferent
 // among many equally-optimal roll-count solutions, so it only ever
-// reveals ONE arbitrary set of "active" patterns - restricting the
-// search to just that set can structurally exclude the patterns a truly
-// minimal solution needs. (Measured: a human planner's 25-pattern
-// solution needed 14 patterns that simply weren't in our 57-pattern
-// pool at all - no amount of searching within that pool could ever have
-// found them, which is why the fast default here caps out around
-// 30-something rather than approaching a human planner's result.) See
-// deepSearchMinTypes below for the slower opt-in mode that addresses
-// this with a much richer candidate pool searched concurrently.
+// reveals ONE arbitrary set of "active" patterns - restricting the search
+// to just that set can structurally exclude the patterns a truly minimal
+// solution needs. (Measured: a human planner's 25-pattern solution needed
+// 14 patterns that simply weren't in our 57-pattern pool at all.) See
+// deepSearchMinTypes below, which always runs and addresses this with a
+// much richer candidate pool searched concurrently.
 //
 // Unlike max_fulfill/min_rolls, an unproven answer here carries no real
 // risk: every candidate this LP considers already satisfies the roll cap
@@ -703,7 +696,6 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // the pattern count might be a bit more than the true best, never a real
 // production regression. Falls back to the input unchanged if it can't
 // find an equally-good solution in time.
-const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 15;
 const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
 const DEEP_SEARCH_SAMPLE_SIZE = 200;
@@ -804,42 +796,10 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
   return { rows, produced, status: "Failed（未找到更少種類的可行解，維持原刀路）" };
 }
 
-async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec, deepSearch) {
+async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeLimitSec, patternsFull, patternCounts) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
   if (totalRolls <= 0) return { rows, produced, status: "N/A" };
-  if (deepSearch && deepSearch.patternsFull && deepSearch.patternCounts) {
-    return deepSearchMinTypes(
-      deepSearch.patternsFull,
-      deepSearch.patternCounts,
-      widths,
-      demand,
-      baseOpts,
-      rows,
-      produced,
-      timeLimitSec
-    );
-  }
-  const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
-  const activePatterns = rows.map((r) => r.items);
-  const activePatternCounts = activePatterns.map(patternToCounts);
-  // Keep every field from the original row (e.g. stockLength on tube-plan
-  // patterns), not just items - extractPatternSolution below only
-  // overwrites `count`, so anything else (like stockLength) needs to
-  // already be present or it comes back undefined.
-  const activePatternsFull = rows.map((r) => ({ ...r }));
-  const lp = buildLP(activePatterns, activePatternCounts, widths, demand, {
-    ...baseOpts,
-    mode: "min_types",
-    rollCap: totalRolls,
-  });
-  const cappedTimeLimit = Math.min(timeLimitSec, TYPE_MINIMIZATION_TIME_LIMIT_SEC);
-  const sol = await solveLP(lp, cappedTimeLimit, { mip_abs_gap: 2 });
-  const ext = extractPatternSolution(sol, activePatternsFull, widths);
-  const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
-  if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
-    return { rows: ext.rows, produced: ext.produced, status: sol.Status };
-  }
-  return { rows, produced, status: (sol ? sol.Status : "Failed") + "（未找到更少種類的可行解，維持原刀路）" };
+  return deepSearchMinTypes(patternsFull, patternCounts, widths, demand, baseOpts, rows, produced, timeLimitSec);
 }
 
 // Generic three-stage solve over an arbitrary set of {items, stockLength}
@@ -851,7 +811,7 @@ async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeL
 //      larger widths without sacrificing the overall fulfillment rate
 //   3. min tube count, pinned to stage 2's per-width allocation so
 //      roll-count optimization can't trade large-width fulfillment away
-async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepSearchEnabled) {
+async function solveTubeStage(patternsFull, widths, demand, t1, t2, label) {
   if (patternsFull.length === 0 || widths.length === 0) {
     return { solution: [], produced: {}, status1: "N/A", status2: "N/A", status3: "N/A" };
   }
@@ -898,12 +858,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     ext = extPriority;
   }
 
-  const typesCap = Math.min(t2, deepSearchEnabled ? DEEP_SEARCH_TYPES_TIME_LIMIT_SEC : TYPE_MINIMIZATION_TIME_LIMIT_SEC);
-  setStatus(
-    `${tag}：最小化組合種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${typesCap} 秒）...`,
-    "busy",
-    typesCap
-  );
+  const typesCap = Math.min(t2, DEEP_SEARCH_TYPES_TIME_LIMIT_SEC);
+  setStatus(`${tag}：深度搜索最小化組合種類數中（最多 ${typesCap} 秒）...`, "busy", typesCap);
   await yieldToUI();
   const typesResult = await minimizeTypeCount(
     widths,
@@ -912,7 +868,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     ext.rows,
     ext.produced,
     t2,
-    deepSearchEnabled ? { patternsFull, patternCounts: counts } : null
+    patternsFull,
+    counts
   );
   const rows = typesResult.rows.slice().sort((a, b) => b.count - a.count);
 
@@ -942,14 +899,13 @@ async function runTubePlan(demand, widths) {
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
-  const deepSearchEnabled = !!(els.deepSearchTypes && els.deepSearchTypes.checked);
 
   const tubeWidths = widths.filter((w) => (demand[String(w)] || 0) > 0).sort((a, b) => a - b);
   const tubeDemand = {};
   for (const w of tubeWidths) tubeDemand[String(w)] = demand[String(w)];
 
   const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
-  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeStageCap, tubeStageCap, "Round1", deepSearchEnabled);
+  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeStageCap, tubeStageCap, "Round1");
 
   const remainingWidths = tubeWidths.filter(
     (w) => tubeDemand[String(w)] - (round1.produced[String(w)] || 0) > 0
@@ -962,7 +918,7 @@ async function runTubePlan(demand, widths) {
   let round2 = { solution: [], produced: {}, status1: "N/A", status2: "N/A", status3: "N/A" };
   if (remainingWidths.length > 0 && round2Lengths.length > 0) {
     const round2Patterns = generateBoundedTubePatterns(remainingWidths, round2Lengths);
-    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeStageCap, tubeStageCap, "Round2", deepSearchEnabled);
+    round2 = await solveTubeStage(round2Patterns, remainingWidths, remainingDemand, tubeStageCap, tubeStageCap, "Round2");
   }
 
   const totalDemand = tubeWidths.reduce((s, w) => s + tubeDemand[String(w)], 0);
@@ -1059,7 +1015,7 @@ function solveInWorker(lpText, options) {
 // trying more samples in the same wall-clock budget matters more than the
 // mainline pipeline's simplicity. Verified: 4 workers solving 4 different
 // samples concurrently finish in ~1x their shared time_limit, not 4x.
-const WORKER_POOL_SIZE = Math.max(2, Math.min(8, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4));
+const WORKER_POOL_SIZE = Math.max(2, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
 let workerPool = null;
 
 function getWorkerPool() {
