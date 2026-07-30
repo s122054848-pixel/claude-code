@@ -1009,8 +1009,11 @@ async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
   const deepSearchEnabled = !!(els.deepSearchTypes && els.deepSearchTypes.checked);
 
+  // Round1 never uses deep search - see the identical note in runPipeline
+  // above (avoids paying the ~30-75s deep-search cost twice, once per
+  // round, back to back).
   const round1Patterns = generateRound1TubePatterns(tubeWidths, round1Lengths, wasteTol);
-  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2, "紙管Round1", deepSearchEnabled);
+  const round1 = await solveTubeStage(round1Patterns, tubeWidths, tubeDemand, tubeT1, tubeT2, "紙管Round1", false);
 
   const remainingWidths = tubeWidths.filter(
     (w) => tubeDemand[String(w)] - (round1.produced[String(w)] || 0) > 0
@@ -1134,7 +1137,15 @@ function solveInWorker(lpText, options) {
 // trying more samples in the same wall-clock budget matters more than the
 // mainline pipeline's simplicity. Verified: 4 workers solving 4 different
 // samples concurrently finish in ~1x their shared time_limit, not 4x.
-const WORKER_POOL_SIZE = Math.max(2, Math.min(8, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4));
+// Match the pool size to the browser's actual reported hardware
+// concurrency exactly - no artificial floor/ceiling. Oversubscribing
+// (more workers than real parallel execution units) doesn't blow up wall
+// time much (HiGHS's time_limit still gets honored per-worker) but does
+// measurably hurt solution quality, since each worker gets a smaller
+// slice of real CPU time within the same nominal budget (measured: 16
+// workers on a 4-core machine landed mostly in the 33-36 pattern-type
+// range, versus 28-32 with a properly-sized 4-worker pool).
+const WORKER_POOL_SIZE = Math.max(1, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
 let workerPool = null;
 
 function getWorkerPool() {
@@ -1486,12 +1497,15 @@ async function runPipeline(mode) {
       round1Produced = extR1.produced;
       round1RollsStatus = solR1Rolls ? solR1Rolls.Status : "Failed";
 
-      const round1TypesCap = Math.min(t2, deepSearchEnabled ? DEEP_SEARCH_TYPES_TIME_LIMIT_SEC : TYPE_MINIMIZATION_TIME_LIMIT_SEC);
-      setStatus(
-        `Round1：最小化刀路種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${round1TypesCap} 秒）...`,
-        "busy",
-        round1TypesCap
-      );
+      // Round1 never uses deep search, even when the checkbox is checked -
+      // deep search's own ~30-75s (relaxation solve + worker-pool search)
+      // would otherwise be paid TWICE per run (once for Round1, once for
+      // Round2 below), stacking additively since the two rounds solve
+      // sequentially. Round1's candidate pool is already small (only the
+      // top-N% largest widths, combined strictly large-to-small) so the
+      // fast path's "active patterns only" search is normally sufficient.
+      const round1TypesCap = TYPE_MINIMIZATION_TIME_LIMIT_SEC;
+      setStatus(`Round1：最小化刀路種類數中（最多 ${round1TypesCap} 秒）...`, "busy", round1TypesCap);
       await yieldToUI();
       const r1Types = await minimizeTypeCount(
         widths,
@@ -1500,7 +1514,7 @@ async function runPipeline(mode) {
         round1Rows,
         round1Produced,
         t2,
-        deepSearchEnabled ? { patternsFull, patternCounts } : null
+        null
       );
       round1Rows = r1Types.rows;
       round1Produced = r1Types.produced;
