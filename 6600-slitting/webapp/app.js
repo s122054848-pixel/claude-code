@@ -53,6 +53,7 @@ const els = {
   maxPieces: document.getElementById("maxPieces"),
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
   deepSearchTypes: document.getElementById("deepSearchTypes"),
+  deepSearchTimeLimit: document.getElementById("deepSearchTimeLimit"),
   trimAllowance: document.getElementById("trimAllowance"),
   trimAllowanceValue: document.getElementById("trimAllowanceValue"),
   round1Pct: document.getElementById("round1Pct"),
@@ -768,6 +769,16 @@ const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
 const DEEP_SEARCH_SAMPLE_SIZE = 200;
 
+// Deep search's per-worker search budget is user-configurable (separate
+// from Round1/Round2's own timeLimit1/timeLimit2 fields, which govern the
+// much smaller/faster fast-mode path) since the two solve fundamentally
+// different-sized problems and a harder dataset may need a much larger
+// deep-search budget without also inflating every other stage's time limit.
+function getDeepSearchTimeLimitSec() {
+  const v = els.deepSearchTimeLimit && Math.round(Number(els.deepSearchTimeLimit.value));
+  return Number.isFinite(v) && v > 0 ? v : DEEP_SEARCH_TYPES_TIME_LIMIT_SEC;
+}
+
 // Deep search: finds a rich set of alternative candidate patterns via LP
 // sensitivity analysis, then searches it with several concurrent workers
 // instead of one sequential solve.
@@ -794,7 +805,7 @@ const DEEP_SEARCH_SAMPLE_SIZE = 200;
 // could land on a mediocre sample and show no improvement at all) -
 // trying several samples per run makes getting at least one good one far
 // more likely.
-async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, baseOpts, rows, produced, timeLimitSec) {
+async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, baseOpts, rows, produced, deepSearchTimeLimitSec) {
   const totalRolls = rows.reduce((s, r) => s + r.count, 0);
   const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
   const patterns = patternsFull.map((p) => p.items);
@@ -815,7 +826,12 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
   }
 
   const pool = getWorkerPool();
-  const cappedTimeLimit = Math.min(timeLimitSec, DEEP_SEARCH_TYPES_TIME_LIMIT_SEC);
+  // Deep search's own time budget is user-configurable (deepSearchTimeLimit
+  // field) and intentionally NOT coupled to the fast-mode stage's own
+  // t1/t2 time limits - the two modes solve fundamentally different-sized
+  // problems (a small "active patterns only" MIP vs. a much larger
+  // reduced-cost candidate pool) and should be tunable independently.
+  const cappedTimeLimit = deepSearchTimeLimitSec;
   const hardMs = hardTimeoutMsFor(cappedTimeLimit);
 
   const jobs = pool.map(async (worker) => {
@@ -876,7 +892,7 @@ async function minimizeTypeCount(widths, demand, baseOpts, rows, produced, timeL
       baseOpts,
       rows,
       produced,
-      timeLimitSec
+      deepSearch.timeLimitSec
     );
   }
   const totalPieces = Object.values(produced).reduce((a, b) => a + b, 0);
@@ -958,7 +974,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     ext = extPriority;
   }
 
-  const typesCap = Math.min(t2, deepSearchEnabled ? DEEP_SEARCH_TYPES_TIME_LIMIT_SEC : TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+  const deepSearchTimeLimitSec = getDeepSearchTimeLimitSec();
+  const typesCap = deepSearchEnabled ? deepSearchTimeLimitSec : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
   setStatus(
     `${tag}：最小化組合種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${typesCap} 秒）...`,
     "busy",
@@ -972,7 +989,7 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     ext.rows,
     ext.produced,
     t2,
-    deepSearchEnabled ? { patternsFull, patternCounts: counts } : null
+    deepSearchEnabled ? { patternsFull, patternCounts: counts, timeLimitSec: deepSearchTimeLimitSec } : null
   );
   const rows = typesResult.rows.slice().sort((a, b) => b.count - a.count);
 
@@ -1576,7 +1593,8 @@ async function runPipeline(mode) {
           round2Produced = extR2.produced;
           round2Status = solR2b ? solR2b.Status : "Failed";
 
-          const round2TypesCap = Math.min(t2, deepSearchEnabled ? DEEP_SEARCH_TYPES_TIME_LIMIT_SEC : TYPE_MINIMIZATION_TIME_LIMIT_SEC);
+          const deepSearchTimeLimitSec = getDeepSearchTimeLimitSec();
+          const round2TypesCap = deepSearchEnabled ? deepSearchTimeLimitSec : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
           setStatus(
             `Round2：最小化刀路種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${round2TypesCap} 秒）...`,
             "busy",
@@ -1590,7 +1608,9 @@ async function runPipeline(mode) {
             round2Rows,
             round2Produced,
             t2,
-            deepSearchEnabled ? { patternsFull: round2PatternsFull, patternCounts: round2PatternCounts } : null
+            deepSearchEnabled
+              ? { patternsFull: round2PatternsFull, patternCounts: round2PatternCounts, timeLimitSec: deepSearchTimeLimitSec }
+              : null
           );
           round2Rows = r2Types.rows;
           round2Produced = r2Types.produced;
