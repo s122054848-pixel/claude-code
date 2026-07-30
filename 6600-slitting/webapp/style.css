@@ -160,6 +160,17 @@ body {
   gap: 10px 14px;
 }
 
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 .field.toggle {
   flex-direction: row;
   align-items: center;
