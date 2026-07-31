@@ -64,8 +64,12 @@ const els = {
   tubeLen3: document.getElementById("tubeLen3"),
   tubeLen4: document.getElementById("tubeLen4"),
   tubeWasteTol: document.getElementById("tubeWasteTol"),
-  tubeStageTimeLimit: document.getElementById("tubeStageTimeLimit"),
-  deepSearchTypes: document.getElementById("deepSearchTypes"),
+  modeFast: document.getElementById("modeFast"),
+  modeDeep: document.getElementById("modeDeep"),
+  fastModePanel: document.getElementById("fastModePanel"),
+  deepModePanel: document.getElementById("deepModePanel"),
+  tubeStageTimeLimitFast: document.getElementById("tubeStageTimeLimitFast"),
+  tubeStageTimeLimitDeep: document.getElementById("tubeStageTimeLimitDeep"),
   deepSearchTimeLimit: document.getElementById("deepSearchTimeLimit"),
   tubeR2Len1: document.getElementById("tubeR2Len1"),
   tubeR2Len2: document.getElementById("tubeR2Len2"),
@@ -119,7 +123,8 @@ for (const id of [
   "tubeLen3",
   "tubeLen4",
   "tubeWasteTol",
-  "tubeStageTimeLimit",
+  "tubeStageTimeLimitFast",
+  "tubeStageTimeLimitDeep",
   "tubeR2Len1",
   "tubeR2Len2",
   "tubeR2Len3",
@@ -128,14 +133,23 @@ for (const id of [
   els[id].addEventListener("change", autoRun);
 }
 
-// Deep search only has a chance of improving on the fast-mode result if
-// the underlying max_fulfill/min_rolls stages themselves converge to
-// Optimal first - a 60s budget is often not enough for that on harder
-// datasets, so bump the shared stage time limit to 300s when deep search
-// is turned on, and back to 60s when turned off.
-els.deepSearchTypes.addEventListener("change", () => {
-  els.tubeStageTimeLimit.value = els.deepSearchTypes.checked ? 300 : 45;
-});
+// Fast mode and deep search each have their own complete set of settings
+// (including their own stage time limit) rather than sharing one field
+// that gets silently overwritten when switching modes - whichever mode tab
+// is selected, that mode's own fields are what actually get used for the
+// run. See isDeepSearchMode() below for how the pipeline reads this.
+function isDeepSearchMode() {
+  return !!(els.modeDeep && els.modeDeep.checked);
+}
+
+function updateModePanels() {
+  const deep = isDeepSearchMode();
+  els.fastModePanel.hidden = deep;
+  els.deepModePanel.hidden = !deep;
+}
+els.modeFast.addEventListener("change", updateModePanels);
+els.modeDeep.addEventListener("change", updateModePanels);
+updateModePanels();
 
 function setStatus(msg, state) {
   els.statusLine.textContent = msg;
@@ -1010,11 +1024,13 @@ function readLengthList(ids) {
 // the absolute worst case for round1+round2 combined is 6 * cap; default
 // 12s keeps that at 72s.
 async function runTubePlan(demand, widths) {
-  const tubeStageCap = Math.max(1, Math.round(Number(els.tubeStageTimeLimit.value)) || 60);
+  const deepSearchEnabled = isDeepSearchMode();
+  const tubeStageCap = deepSearchEnabled
+    ? Math.max(1, Math.round(Number(els.tubeStageTimeLimitDeep.value)) || 300)
+    : Math.max(1, Math.round(Number(els.tubeStageTimeLimitFast.value)) || 45);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
-  const deepSearchEnabled = !!(els.deepSearchTypes && els.deepSearchTypes.checked);
 
   const tubeWidths = widths.filter((w) => (demand[String(w)] || 0) > 0).sort((a, b) => a - b);
   const tubeDemand = {};

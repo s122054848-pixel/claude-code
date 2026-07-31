@@ -52,14 +52,18 @@ const els = {
   motherWidth: document.getElementById("motherWidth"),
   maxPieces: document.getElementById("maxPieces"),
   minRollsPerPattern: document.getElementById("minRollsPerPattern"),
-  deepSearchTypes: document.getElementById("deepSearchTypes"),
+  modeFast: document.getElementById("modeFast"),
+  modeDeep: document.getElementById("modeDeep"),
+  fastModePanel: document.getElementById("fastModePanel"),
+  deepModePanel: document.getElementById("deepModePanel"),
   deepSearchTimeLimit: document.getElementById("deepSearchTimeLimit"),
   trimAllowance: document.getElementById("trimAllowance"),
   trimAllowanceValue: document.getElementById("trimAllowanceValue"),
   round1Pct: document.getElementById("round1Pct"),
   round1PctValue: document.getElementById("round1PctValue"),
   timeLimit1: document.getElementById("timeLimit1"),
-  timeLimit2: document.getElementById("timeLimit2"),
+  timeLimit2Fast: document.getElementById("timeLimit2Fast"),
+  timeLimit2Deep: document.getElementById("timeLimit2Deep"),
   runSlitBtn: document.getElementById("runSlitBtn"),
   runFullBtn: document.getElementById("runFullBtn"),
   runTubeBtn: document.getElementById("runTubeBtn"),
@@ -124,15 +128,23 @@ els.trimAllowance.addEventListener("input", () => {
   els.trimAllowanceValue.textContent = `${els.trimAllowance.value}mm`;
 });
 
-// Deep search only has a chance of improving on the fast-mode result if
-// the underlying max_fulfill/min_rolls stages themselves converge to
-// Optimal first (see the deepSearchMinTypes rationale below) - a 60s
-// min-rolls budget is often not enough for that on harder datasets, so
-// bump it to 300s when deep search is turned on, and back to 60s when
-// turned off, rather than leaving it on the user to remember to do so.
-els.deepSearchTypes.addEventListener("change", () => {
-  els.timeLimit2.value = els.deepSearchTypes.checked ? 300 : 45;
-});
+// Fast mode and deep search each have their own complete set of settings
+// (including their own min-rolls time limit) rather than sharing one field
+// that gets silently overwritten when switching modes - whichever mode tab
+// is selected, that mode's own fields are what actually get used for the
+// run. See isDeepSearchMode() below for how the pipeline reads this.
+function isDeepSearchMode() {
+  return !!(els.modeDeep && els.modeDeep.checked);
+}
+
+function updateModePanels() {
+  const deep = isDeepSearchMode();
+  els.fastModePanel.hidden = deep;
+  els.deepModePanel.hidden = !deep;
+}
+els.modeFast.addEventListener("change", updateModePanels);
+els.modeDeep.addEventListener("change", updateModePanels);
+updateModePanels();
 
 function setStatus(msg, state) {
   els.statusLine.textContent = msg;
@@ -1082,7 +1094,7 @@ async function runTubePlanCore(tubeWidths, tubeDemand, t1, t2) {
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
   const wasteTol = Math.max(0, Number(els.tubeWasteTol.value) || 0) / 100;
-  const deepSearchEnabled = !!(els.deepSearchTypes && els.deepSearchTypes.checked);
+  const deepSearchEnabled = isDeepSearchMode();
 
   // Round1 never uses deep search - see the identical note in runPipeline
   // above (avoids paying the ~30-75s deep-search cost twice, once per
@@ -1566,7 +1578,10 @@ async function runPipeline(mode) {
     const maxPieces = Math.max(1, Math.round(Number(els.maxPieces.value)));
     const trimAllowance = Math.min(600, Math.max(-50, Math.round(Number(els.trimAllowance.value)) || 0));
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 60);
-    const t2 = Math.max(1, Number(els.timeLimit2.value) || 300);
+    const deepSearchEnabled = isDeepSearchMode();
+    const t2 = deepSearchEnabled
+      ? Math.max(1, Number(els.timeLimit2Deep.value) || 300)
+      : Math.max(1, Number(els.timeLimit2Fast.value) || 45);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
       hideStages();
@@ -1605,7 +1620,6 @@ async function runPipeline(mode) {
     }
 
     const minBatch = Math.max(1, Math.round(Number(els.minRollsPerPattern.value)) || 1);
-    const deepSearchEnabled = !!(els.deepSearchTypes && els.deepSearchTypes.checked);
 
     // ---- Round1: user-adjustable top N% of largest distinct widths (slider,
     // default 40%), combined strictly large-to-small. Uses the full pattern

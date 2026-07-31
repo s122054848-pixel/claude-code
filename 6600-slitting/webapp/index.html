@@ -59,19 +59,35 @@
           Round1 大尺寸組合，每規格時限 (秒)
           <input type="number" id="timeLimit1" value="60" min="1" step="1">
         </label>
-        <label class="field">
-          最少母卷數時限 (秒)
-          <input type="number" id="timeLimit2" value="45" min="1" step="1">
+      </div>
+      <div class="mode-switch">
+        <label class="mode-tab">
+          <input type="radio" name="searchMode" id="modeFast" value="fast" checked>
+          快速模式
+        </label>
+        <label class="mode-tab">
+          <input type="radio" name="searchMode" id="modeDeep" value="deep">
+          深度搜索
         </label>
       </div>
-      <label class="field checkbox-field">
-        <input type="checkbox" id="deepSearchTypes">
-        深度搜索刀路種類數（較慢，效果較好）
-      </label>
-      <label class="field">
-        深度搜索時限 (秒，與上方每規格時限/最少母卷數時限分開設定)
-        <input type="number" id="deepSearchTimeLimit" value="90" min="5" step="5">
-      </label>
+      <div class="mode-panel" id="fastModePanel">
+        <label class="field">
+          最少母卷數時限 (秒)
+          <input type="number" id="timeLimit2Fast" value="45" min="1" step="1">
+        </label>
+        <p class="hint">「刀路種類最小化」只挑選單次求解找到的組合裡種類最少的一種，約十幾秒。</p>
+      </div>
+      <div class="mode-panel" id="deepModePanel" hidden>
+        <label class="field">
+          最少母卷數時限 (秒)
+          <input type="number" id="timeLimit2Deep" value="300" min="1" step="1">
+        </label>
+        <label class="field">
+          深度搜索時限 (秒)
+          <input type="number" id="deepSearchTimeLimit" value="90" min="5" step="5">
+        </label>
+        <p class="hint">Round2 額外用鬆弛解分析＋多執行緒搜索更少的種類數，較慢但效果較好（Round1 恆為快速模式）。「深度搜索時限」只影響這個搜索步驟，與上方「最少母卷數時限」分開計算。</p>
+      </div>
       <label class="field">
         容許修邊尺寸：<span id="trimAllowanceValue">0mm</span>
         <input type="range" id="trimAllowance" min="-50" max="600" step="10" value="0">
@@ -81,8 +97,7 @@
         <input type="range" id="round1Pct" min="0" max="100" step="2" value="20">
       </label>
       <p class="hint">同刀路最少母卷數：低於此值的零星刀路不採用。容許修邊尺寸：0 為零損耗（刀路需恰好湊滿母卷寬度）；正值放寬（刀路可略窄於母卷，損耗 ≤ 此值，組合更多）；負值反向，允許刀路合計寬度超過母卷寬度（適用於母卷實際寬度略寬於公稱值）。</p>
-      <p class="hint">求解分兩輪：Round1 取前 N%（滑桿調整，預設 20%）最大規格，由大到小逐一排產，避免搶走更大規格的產量；Round2 處理剩餘規格，先求最高排抄率、再求最少母卷數。每規格時限預設 60 秒、最少母卷數時限預設 45 秒（勾選「深度搜索」自動改為 300 秒，取消則改回 45 秒）。求解器若提早觸頂未證明最佳，會顯示「Time limit reached」，此時可調大這兩個欄位再重跑。</p>
-      <p class="hint">「刀路種類最小化」預設為快速模式（約十幾秒，Round1/Round2 皆適用）。勾選「深度搜索」後，Round2 會改用鬆弛解分析＋多執行緒搜索更少的種類數（Round1 恆為快速模式，避免耗時在兩輪間疊加）。「深度搜索時限」（預設 45 秒）獨立於上方時限之外，只影響這個步驟；若上方兩個基礎階段本身還沒收斂到 Optimal，應優先調大上方時限而非深度搜索時限。</p>
+      <p class="hint">求解分兩輪：Round1 取前 N%（滑桿調整，預設 20%）最大規格，由大到小逐一排產，避免搶走更大規格的產量；Round2 處理剩餘規格，先求最高排抄率、再求最少母卷數。「快速模式」「深度搜索」各自有獨立的最少母卷數時限設定，切換模式不會互相覆蓋；執行時只會用當前選取模式的設定。求解器若提早觸頂未證明最佳，會顯示「Time limit reached」，此時可調大該模式的時限欄位再重跑。</p>
     </section>
 
     <section class="panel">

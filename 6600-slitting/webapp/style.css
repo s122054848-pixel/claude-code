@@ -166,6 +166,46 @@ body {
   gap: 8px;
 }
 
+.mode-switch {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.mode-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.mode-tab:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.mode-tab input {
+  width: auto;
+  margin: 0;
+}
+
+.mode-panel {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: #fafbff;
+}
+
 .checkbox-field input[type="checkbox"] {
   width: auto;
   margin: 0;
