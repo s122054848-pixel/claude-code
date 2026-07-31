@@ -210,8 +210,16 @@ function parseOrders(text) {
   const orderRows = [];
   const lines = text.split(/\r?\n/);
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    let line = rawLine.trim();
     if (!line) continue;
+    // Some ERP exports wrap each entire row in a single pair of double
+    // quotes (e.g. `"訂單,項次,...,寬度,數量"`) rather than quoting
+    // individual fields - strip that one outer layer before splitting, or
+    // the trailing quote glues onto the last field (qty becomes `4"`,
+    // which fails Number() and silently drops the whole row).
+    if (line.length >= 2 && line[0] === '"' && line[line.length - 1] === '"') {
+      line = line.slice(1, -1).trim();
+    }
     const commaParts = line.split(/[,，]/).map((s) => s.trim()).filter((s) => s.length);
     let w, q, orderNo, seq, custNo, custName, itemNo;
     if (commaParts.length >= 7) {
