@@ -105,8 +105,31 @@
         <span class="spinner" id="statusSpinner" hidden></span>
         <span id="statusLine">請上傳或編輯紙管需求資料，系統會自動計算紙管組合計畫。</span>
       </div>
-      <div class="progress-track" id="statusProgressWrap" hidden>
-        <div class="progress-fill" id="statusProgressFill"></div>
+      <div class="stage-tracker" id="stageTracker" hidden>
+        <div class="stage-item" id="stage-fulfill-item">
+          <div class="stage-row">
+            <span class="stage-name">最大排產量／最高排抄率</span>
+            <span class="stage-seconds" id="stage-fulfill-seconds"></span>
+          </div>
+          <div class="stage-detail" id="stage-fulfill-detail">待處理</div>
+          <div class="progress-track"><div class="progress-fill" id="stage-fulfill-fill"></div></div>
+        </div>
+        <div class="stage-item" id="stage-rolls-item">
+          <div class="stage-row">
+            <span class="stage-name">最少母管數</span>
+            <span class="stage-seconds" id="stage-rolls-seconds"></span>
+          </div>
+          <div class="stage-detail" id="stage-rolls-detail">待處理</div>
+          <div class="progress-track"><div class="progress-fill" id="stage-rolls-fill"></div></div>
+        </div>
+        <div class="stage-item" id="stage-types-item">
+          <div class="stage-row">
+            <span class="stage-name">組合種類最小化</span>
+            <span class="stage-seconds" id="stage-types-seconds"></span>
+          </div>
+          <div class="stage-detail" id="stage-types-detail">待處理</div>
+          <div class="progress-track"><div class="progress-fill" id="stage-types-fill"></div></div>
+        </div>
       </div>
     </div>
   </aside>

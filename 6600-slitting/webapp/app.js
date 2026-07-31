@@ -66,8 +66,7 @@ const els = {
   statusBanner: document.getElementById("statusBanner"),
   statusSpinner: document.getElementById("statusSpinner"),
   statusLine: document.getElementById("statusLine"),
-  statusProgressWrap: document.getElementById("statusProgressWrap"),
-  statusProgressFill: document.getElementById("statusProgressFill"),
+  stageTracker: document.getElementById("stageTracker"),
   warningsPanel: document.getElementById("warningsPanel"),
   warningsList: document.getElementById("warningsList"),
   summaryPanel: document.getElementById("summaryPanel"),
@@ -135,60 +134,88 @@ els.deepSearchTypes.addEventListener("change", () => {
   els.timeLimit2.value = els.deepSearchTypes.checked ? 300 : 45;
 });
 
-// A single solve can legitimately take over a minute (harder MIPs with the
-// min-batch-size constraint don't converge quickly), during which only one
-// or two status lines would otherwise change - which can look identical to
-// a frozen/broken page. Show a live elapsed-time counter while busy, plus
-// (when the caller knows the current stage's time budget) a progress bar
-// showing how far into that budget the stage has gotten - not a measure of
-// solution quality/gap (HiGHS's WASM binding here doesn't expose live
-// solver-internal progress), just a "how much of its allotted time has this
-// step used" indicator so a long wait still visibly moves.
-let elapsedTimer = null;
-let pipelineStartTime = null;
-let lastBusyMsg = "";
-let stageStartTime = null;
-let stageCapSec = null;
-
-function updateBusyStatusLine() {
-  const totalS = Math.round((Date.now() - pipelineStartTime) / 1000);
-  let text = `${lastBusyMsg}（已運算 ${totalS} 秒`;
-  if (stageCapSec) {
-    const stageS = Math.round((Date.now() - stageStartTime) / 1000);
-    const pct = Math.max(0, Math.min(99, Math.round((stageS / stageCapSec) * 100)));
-    text += `，本階段進度約 ${pct}%（上限 ${stageCapSec} 秒）`;
-    els.statusProgressWrap.hidden = false;
-    els.statusProgressFill.style.width = pct + "%";
-  } else {
-    els.statusProgressWrap.hidden = true;
-  }
-  els.statusLine.textContent = text + "）";
-}
-
-function setStatus(msg, state, stageCap) {
-  if (state === "busy") {
-    lastBusyMsg = msg;
-    if (!pipelineStartTime) pipelineStartTime = Date.now();
-    if (stageCap !== stageCapSec) {
-      stageCapSec = stageCap || null;
-      stageStartTime = Date.now();
-    }
-    if (!elapsedTimer) elapsedTimer = setInterval(updateBusyStatusLine, 1000);
-    updateBusyStatusLine();
-  } else {
-    if (elapsedTimer) {
-      clearInterval(elapsedTimer);
-      elapsedTimer = null;
-    }
-    pipelineStartTime = null;
-    stageStartTime = null;
-    stageCapSec = null;
-    els.statusLine.textContent = msg;
-    els.statusProgressWrap.hidden = true;
-    els.statusProgressFill.style.width = "0%";
-  }
+function setStatus(msg, state) {
+  els.statusLine.textContent = msg;
   els.statusBanner.className = "status-banner state-" + (state || "idle");
   els.statusSpinner.hidden = state !== "busy";
+}
+
+// ---- per-stage progress tracking ----
+// A single solve can legitimately take over a minute (harder MIPs with the
+// min-batch-size constraint don't converge quickly), during which the top
+// status line barely changes - which can look identical to a frozen/broken
+// page. Rather than one rotating line, track the pipeline's three solve
+// stages (max_fulfill, min_rolls, min_types) as persistent rows, each with
+// its own live elapsed-time counter and progress bar (not a measure of
+// solution quality/gap - HiGHS's WASM binding here doesn't expose live
+// solver-internal progress - just "how much of its allotted time has this
+// step used"). Round1 and Round2 share the same three rows, resetting the
+// relevant row's timer whenever that stage starts a fresh occurrence (e.g.
+// moving from Round1's fulfill solve to Round2's).
+const STAGE_KEYS = ["fulfill", "rolls", "types"];
+const stageEls = {};
+for (const key of STAGE_KEYS) {
+  stageEls[key] = {
+    item: document.getElementById(`stage-${key}-item`),
+    seconds: document.getElementById(`stage-${key}-seconds`),
+    detail: document.getElementById(`stage-${key}-detail`),
+    fill: document.getElementById(`stage-${key}-fill`),
+  };
+}
+let stageState = {};
+let stageTickTimer = null;
+
+function renderStages() {
+  for (const key of STAGE_KEYS) {
+    const s = stageState[key];
+    const e = stageEls[key];
+    if (!s || !s.start) {
+      e.item.className = "stage-item";
+      e.seconds.textContent = "";
+      e.detail.textContent = (s && s.detail) || "待處理";
+      e.fill.style.width = "0%";
+      continue;
+    }
+    const elapsedS = Math.round((Date.now() - s.start) / 1000);
+    e.seconds.textContent = `${elapsedS} 秒`;
+    e.detail.textContent = s.detail;
+    if (s.active) {
+      e.item.className = "stage-item is-active";
+      const pct = s.cap ? Math.max(0, Math.min(99, Math.round((elapsedS / s.cap) * 100))) : 0;
+      e.fill.style.width = pct + "%";
+    } else {
+      e.item.className = "stage-item is-done";
+      e.fill.style.width = "100%";
+    }
+  }
+}
+
+function resetStages() {
+  stageState = {};
+  for (const key of STAGE_KEYS) stageState[key] = { active: false, start: null, cap: null, detail: "待處理" };
+  els.stageTracker.hidden = false;
+  renderStages();
+}
+
+function hideStages() {
+  els.stageTracker.hidden = true;
+  if (stageTickTimer) {
+    clearInterval(stageTickTimer);
+    stageTickTimer = null;
+  }
+}
+
+function beginStage(key, detail, cap) {
+  stageState[key] = { active: true, start: Date.now(), cap: cap || null, detail };
+  if (!stageTickTimer) stageTickTimer = setInterval(renderStages, 1000);
+  renderStages();
+}
+
+function finishStage(key, detail) {
+  if (!stageState[key]) return;
+  stageState[key].active = false;
+  stageState[key].detail = detail;
+  renderStages();
 }
 
 // ---- parsing ----
@@ -962,7 +989,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
   const itemsList = patternsFull.map((p) => p.items);
   const counts = itemsList.map(patternToCounts);
   const lp1 = buildLP(itemsList, counts, widths, demand, { mode: "max_fulfill" });
-  setStatus(`${tag}：求解最大排產量中（最多 ${t1} 秒）...`, "busy", t1);
+  setStatus(`${tag}：求解最大排產量中...`, "busy");
+  beginStage("fulfill", `${tag}：求解最大排產量中`, t1);
   await yieldToUI();
   const sol1 = await solveMaxFulfillConcurrent(lp1, t1);
   const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
@@ -972,7 +1000,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     fulfillFloor,
     weightFn: (w) => w,
   });
-  setStatus(`${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中（最多 ${t1} 秒）...`, "busy", t1);
+  setStatus(`${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中...`, "busy");
+  beginStage("fulfill", `${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中`, t1);
   await yieldToUI();
   const solPriority = await solveLP(lpPriority, t1);
   let extPriority = extractPatternSolution(solPriority, patternsFull, widths);
@@ -983,13 +1012,15 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
   }
   const priorityFloor = {};
   for (const w of widths) priorityFloor[String(w)] = extPriority.produced[String(w)] || 0;
+  finishStage("fulfill", `${tag}：狀態 ${solPriority ? solPriority.Status : "Failed"}，共 ${extPriority.totalProduced} 件`);
 
   const lp2 = buildLP(itemsList, counts, widths, demand, {
     mode: "min_rolls",
     fulfillFloor,
     perWidthFloor: priorityFloor,
   });
-  setStatus(`${tag}：求解最少母管數中（最多 ${t2} 秒）...`, "busy", t2);
+  setStatus(`${tag}：求解最少母管數中...`, "busy");
+  beginStage("rolls", `${tag}：求解最少母管數中`, t2);
   await yieldToUI();
   const sol2 = await solveLP(lp2, t2);
 
@@ -1000,14 +1031,13 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     // which is already known to achieve them.
     ext = extPriority;
   }
+  const rollsCount = ext.rows.reduce((s, r) => s + r.count, 0);
+  finishStage("rolls", `${tag}：狀態 ${sol2 ? sol2.Status : "Failed"}，共 ${rollsCount} 支`);
 
   const deepSearchTimeLimitSec = getDeepSearchTimeLimitSec();
   const typesCap = deepSearchEnabled ? deepSearchTimeLimitSec : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
-  setStatus(
-    `${tag}：最小化組合種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${typesCap} 秒）...`,
-    "busy",
-    typesCap
-  );
+  setStatus(`${tag}：最小化組合種類數中${deepSearchEnabled ? "（深度搜索）" : ""}...`, "busy");
+  beginStage("types", `${tag}：最小化組合種類數中${deepSearchEnabled ? "（深度搜索）" : ""}`, typesCap);
   await yieldToUI();
   const typesResult = await minimizeTypeCount(
     widths,
@@ -1019,6 +1049,7 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     deepSearchEnabled ? { patternsFull, patternCounts: counts, timeLimitSec: deepSearchTimeLimitSec } : null
   );
   const rows = typesResult.rows.slice().sort((a, b) => b.count - a.count);
+  finishStage("types", `${tag}：狀態 ${typesResult.status}，共 ${rows.length} 種`);
 
   return {
     solution: rows,
@@ -1493,9 +1524,11 @@ async function runPipeline(mode) {
   try {
     const { widths, demand, orderRows } = parseOrders(els.ordersText.value);
     if (widths.length === 0) {
+      hideStages();
       setStatus("找不到有效的訂單資料，請確認格式為「寬度,數量」。", "idle");
       return;
     }
+    resetStages();
 
     if (mode === "tube") {
       // ---- 4600 only: imported data is treated directly as tube-segment
@@ -1536,6 +1569,7 @@ async function runPipeline(mode) {
     const t2 = Math.max(1, Number(els.timeLimit2.value) || 300);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
+      hideStages();
       setStatus("母卷寬度必須是正整數。", "error");
       return;
     }
@@ -1545,6 +1579,7 @@ async function runPipeline(mode) {
     const patterns = generatePatterns(widths, motherWidth, maxPieces, trimAllowance);
 
     if (patterns.length === 0) {
+      hideStages();
       setStatus(
         `在母卷寬度 ${motherWidth}mm、每卷最多 ${maxPieces} 刀、容許修邊 ${trimAllowance}mm 的限制下，找不到任何可行組合，請調整參數。`,
         "error"
@@ -1604,11 +1639,9 @@ async function runPipeline(mode) {
 
     for (let idx = 0; idx < round1WidthsDesc.length; idx++) {
       const w = round1WidthsDesc[idx];
-      setStatus(
-        `Round1：大尺寸門幅組合中（${idx + 1}/${round1WidthsDesc.length}，規格 ${w}mm，最多 ${priorityCap} 秒）...`,
-        "busy",
-        priorityCap
-      );
+      const label = `Round1：大尺寸門幅組合中（${idx + 1}/${round1WidthsDesc.length}，規格 ${w}mm）`;
+      setStatus(`${label}...`, "busy");
+      beginStage("fulfill", label, priorityCap);
       await yieldToUI();
       const lpPriority = buildLP(patterns, patternCounts, widths, lockedDemand, {
         mode: "max_fulfill",
@@ -1624,6 +1657,9 @@ async function runPipeline(mode) {
       lockedFloor[String(w)] = val;
       lastRound1Sol = solPriority;
     }
+    if (round1WidthsDesc.length > 0) {
+      finishStage("fulfill", `Round1：大尺寸組合完成，共 ${round1WidthsDesc.length} 規格`);
+    }
 
     const round1Total = Object.values(round1Achieved).reduce((a, b) => a + b, 0);
     const patternsFull = patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
@@ -1632,11 +1668,8 @@ async function runPipeline(mode) {
     let round1RollsStatus = "N/A";
     let round1TypesStatus = "N/A";
     if (round1Total > 0) {
-      setStatus(
-        `Round1：大尺寸組合完成，共排產 ${round1Total} 件。求解最少母卷數中（最多 ${t2} 秒）...`,
-        "busy",
-        t2
-      );
+      setStatus(`Round1：大尺寸組合完成，共排產 ${round1Total} 件。求解最少母卷數中...`, "busy");
+      beginStage("rolls", `Round1：求解最少母卷數中（共排產 ${round1Total} 件）`, t2);
       await yieldToUI();
       const lpR1Rolls = buildLP(patterns, patternCounts, widths, demand, {
         mode: "min_rolls",
@@ -1656,6 +1689,7 @@ async function runPipeline(mode) {
       round1Rows = extR1.rows;
       round1Produced = extR1.produced;
       round1RollsStatus = solR1Rolls ? solR1Rolls.Status : "Failed";
+      finishStage("rolls", `Round1：狀態 ${round1RollsStatus}，共 ${round1Rows.reduce((s, r) => s + r.count, 0)} 支`);
 
       // Round1 never uses deep search, even when the checkbox is checked -
       // deep search's own ~30-75s (relaxation solve + worker-pool search)
@@ -1665,7 +1699,8 @@ async function runPipeline(mode) {
       // top-N% largest widths, combined strictly large-to-small) so the
       // fast path's "active patterns only" search is normally sufficient.
       const round1TypesCap = TYPE_MINIMIZATION_TIME_LIMIT_SEC;
-      setStatus(`Round1：最小化刀路種類數中（最多 ${round1TypesCap} 秒）...`, "busy", round1TypesCap);
+      setStatus(`Round1：最小化刀路種類數中...`, "busy");
+      beginStage("types", "Round1：最小化刀路種類數中", round1TypesCap);
       await yieldToUI();
       const r1Types = await minimizeTypeCount(
         widths,
@@ -1679,6 +1714,7 @@ async function runPipeline(mode) {
       round1Rows = r1Types.rows;
       round1Produced = r1Types.produced;
       round1TypesStatus = r1Types.status;
+      finishStage("types", `Round1：狀態 ${round1TypesStatus}，共 ${round1Rows.length} 種`);
     }
 
     // ---- Round2: everything Round1 didn't fully cut (leftover large-width
@@ -1701,10 +1737,13 @@ async function runPipeline(mode) {
     let round2Status = "N/A";
     let round2TypesStatus = "N/A";
     if (remainingWidths.length > 0) {
-      setStatus(`Round2：對剩餘規格求解最高排抄率中（最多 ${t2} 秒）...`, "busy", t2);
+      setStatus(`Round2：對剩餘規格求解最高排抄率中...`, "busy");
+      beginStage("fulfill", "Round2：對剩餘規格求解最高排抄率中", t2);
       await yieldToUI();
       const round2Patterns = generatePatterns(remainingWidths, motherWidth, maxPieces, trimAllowance);
-      if (round2Patterns.length > 0) {
+      if (round2Patterns.length === 0) {
+        finishStage("fulfill", "Round2：無可行刀路組合");
+      } else {
         const round2PatternCounts = round2Patterns.map(patternToCounts);
         const round2PatternsFull = round2Patterns.map((items) => ({ items: items.slice().sort((a, b) => a - b) }));
         const lpR2a = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
@@ -1714,13 +1753,11 @@ async function runPipeline(mode) {
         const solR2a = await solveMaxFulfillConcurrent(lpR2a, t2);
         const round2Floor = solR2a && Number.isFinite(solR2a.ObjectiveValue) ? Math.round(solR2a.ObjectiveValue) : 0;
         round2FloorStatus = solR2a ? solR2a.Status : "Failed";
+        finishStage("fulfill", `Round2：狀態 ${round2FloorStatus}，共 ${round2Floor} 件`);
 
         if (round2Floor > 0) {
-          setStatus(
-            `Round2：最高排抄率為 ${round2Floor} 件（狀態：${round2FloorStatus}）。求解最少母卷數中（最多 ${t2} 秒）...`,
-            "busy",
-            t2
-          );
+          setStatus(`Round2：最高排抄率為 ${round2Floor} 件（狀態：${round2FloorStatus}）。求解最少母卷數中...`, "busy");
+          beginStage("rolls", `Round2：求解最少母卷數中（最高排抄率 ${round2Floor} 件）`, t2);
           await yieldToUI();
           const lpR2b = buildLP(round2Patterns, round2PatternCounts, remainingWidths, remainingDemand, {
             mode: "min_rolls",
@@ -1735,14 +1772,12 @@ async function runPipeline(mode) {
           round2Rows = extR2.rows;
           round2Produced = extR2.produced;
           round2Status = solR2b ? solR2b.Status : "Failed";
+          finishStage("rolls", `Round2：狀態 ${round2Status}，共 ${round2Rows.reduce((s, r) => s + r.count, 0)} 支`);
 
           const deepSearchTimeLimitSec = getDeepSearchTimeLimitSec();
           const round2TypesCap = deepSearchEnabled ? deepSearchTimeLimitSec : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
-          setStatus(
-            `Round2：最小化刀路種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${round2TypesCap} 秒）...`,
-            "busy",
-            round2TypesCap
-          );
+          setStatus(`Round2：最小化刀路種類數中${deepSearchEnabled ? "（深度搜索）" : ""}...`, "busy");
+          beginStage("types", `Round2：最小化刀路種類數中${deepSearchEnabled ? "（深度搜索）" : ""}`, round2TypesCap);
           await yieldToUI();
           const r2Types = await minimizeTypeCount(
             remainingWidths,
@@ -1758,6 +1793,7 @@ async function runPipeline(mode) {
           round2Rows = r2Types.rows;
           round2Produced = r2Types.produced;
           round2TypesStatus = r2Types.status;
+          finishStage("types", `Round2：狀態 ${round2TypesStatus}，共 ${round2Rows.length} 種`);
         }
       }
     }
@@ -1827,6 +1863,7 @@ async function runPipeline(mode) {
     let tubeSummaryMsg = "";
     if (mode === "full") {
       setStatus("排刀計畫完成，計算紙管組合計畫中...", "busy");
+      resetStages();
       await yieldToUI();
       const tube = await runTubePlan(produced, Infinity, Infinity);
       renderTubePlan(tube);

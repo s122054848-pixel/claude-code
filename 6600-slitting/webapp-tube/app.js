@@ -58,8 +58,7 @@ const els = {
   statusBanner: document.getElementById("statusBanner"),
   statusSpinner: document.getElementById("statusSpinner"),
   statusLine: document.getElementById("statusLine"),
-  statusProgressWrap: document.getElementById("statusProgressWrap"),
-  statusProgressFill: document.getElementById("statusProgressFill"),
+  stageTracker: document.getElementById("stageTracker"),
   tubeLen1: document.getElementById("tubeLen1"),
   tubeLen2: document.getElementById("tubeLen2"),
   tubeLen3: document.getElementById("tubeLen3"),
@@ -138,58 +137,86 @@ els.deepSearchTypes.addEventListener("change", () => {
   els.tubeStageTimeLimit.value = els.deepSearchTypes.checked ? 300 : 45;
 });
 
-// A single solve can legitimately take tens of seconds, during which only
-// one or two status lines would otherwise change - which can look identical
-// to a frozen/broken page. Show a live elapsed-time counter while busy, plus
-// (when the caller knows the current stage's time budget) a progress bar
-// showing how far into that budget the stage has gotten - see webapp/app.js
-// for the full rationale (not a solution-quality/gap measure, just a "how
-// much of its allotted time has this step used" indicator).
-let elapsedTimer = null;
-let pipelineStartTime = null;
-let lastBusyMsg = "";
-let stageStartTime = null;
-let stageCapSec = null;
-
-function updateBusyStatusLine() {
-  const totalS = Math.round((Date.now() - pipelineStartTime) / 1000);
-  let text = `${lastBusyMsg}（已運算 ${totalS} 秒`;
-  if (stageCapSec) {
-    const stageS = Math.round((Date.now() - stageStartTime) / 1000);
-    const pct = Math.max(0, Math.min(99, Math.round((stageS / stageCapSec) * 100)));
-    text += `，本階段進度約 ${pct}%（上限 ${stageCapSec} 秒）`;
-    els.statusProgressWrap.hidden = false;
-    els.statusProgressFill.style.width = pct + "%";
-  } else {
-    els.statusProgressWrap.hidden = true;
-  }
-  els.statusLine.textContent = text + "）";
-}
-
-function setStatus(msg, state, stageCap) {
-  if (state === "busy") {
-    lastBusyMsg = msg;
-    if (!pipelineStartTime) pipelineStartTime = Date.now();
-    if (stageCap !== stageCapSec) {
-      stageCapSec = stageCap || null;
-      stageStartTime = Date.now();
-    }
-    if (!elapsedTimer) elapsedTimer = setInterval(updateBusyStatusLine, 1000);
-    updateBusyStatusLine();
-  } else {
-    if (elapsedTimer) {
-      clearInterval(elapsedTimer);
-      elapsedTimer = null;
-    }
-    pipelineStartTime = null;
-    stageStartTime = null;
-    stageCapSec = null;
-    els.statusLine.textContent = msg;
-    els.statusProgressWrap.hidden = true;
-    els.statusProgressFill.style.width = "0%";
-  }
+function setStatus(msg, state) {
+  els.statusLine.textContent = msg;
   els.statusBanner.className = "status-banner state-" + (state || "idle");
   els.statusSpinner.hidden = state !== "busy";
+}
+
+// ---- per-stage progress tracking ----
+// A single solve can legitimately take tens of seconds, during which the
+// top status line barely changes - which can look identical to a frozen/
+// broken page. Rather than one rotating line, track the pipeline's three
+// solve stages (max_fulfill, min_rolls, min_types) as persistent rows, each
+// with its own live elapsed-time counter and progress bar (not a solution-
+// quality/gap measure - HiGHS's WASM binding here doesn't expose live
+// solver-internal progress - just "how much of its allotted time has this
+// step used"). Round1 and Round2 share the same three rows, resetting the
+// relevant row's timer whenever that stage starts a fresh occurrence.
+const STAGE_KEYS = ["fulfill", "rolls", "types"];
+const stageEls = {};
+for (const key of STAGE_KEYS) {
+  stageEls[key] = {
+    item: document.getElementById(`stage-${key}-item`),
+    seconds: document.getElementById(`stage-${key}-seconds`),
+    detail: document.getElementById(`stage-${key}-detail`),
+    fill: document.getElementById(`stage-${key}-fill`),
+  };
+}
+let stageState = {};
+let stageTickTimer = null;
+
+function renderStages() {
+  for (const key of STAGE_KEYS) {
+    const s = stageState[key];
+    const e = stageEls[key];
+    if (!s || !s.start) {
+      e.item.className = "stage-item";
+      e.seconds.textContent = "";
+      e.detail.textContent = (s && s.detail) || "待處理";
+      e.fill.style.width = "0%";
+      continue;
+    }
+    const elapsedS = Math.round((Date.now() - s.start) / 1000);
+    e.seconds.textContent = `${elapsedS} 秒`;
+    e.detail.textContent = s.detail;
+    if (s.active) {
+      e.item.className = "stage-item is-active";
+      const pct = s.cap ? Math.max(0, Math.min(99, Math.round((elapsedS / s.cap) * 100))) : 0;
+      e.fill.style.width = pct + "%";
+    } else {
+      e.item.className = "stage-item is-done";
+      e.fill.style.width = "100%";
+    }
+  }
+}
+
+function resetStages() {
+  stageState = {};
+  for (const key of STAGE_KEYS) stageState[key] = { active: false, start: null, cap: null, detail: "待處理" };
+  els.stageTracker.hidden = false;
+  renderStages();
+}
+
+function hideStages() {
+  els.stageTracker.hidden = true;
+  if (stageTickTimer) {
+    clearInterval(stageTickTimer);
+    stageTickTimer = null;
+  }
+}
+
+function beginStage(key, detail, cap) {
+  stageState[key] = { active: true, start: Date.now(), cap: cap || null, detail };
+  if (!stageTickTimer) stageTickTimer = setInterval(renderStages, 1000);
+  renderStages();
+}
+
+function finishStage(key, detail) {
+  if (!stageState[key]) return;
+  stageState[key].active = false;
+  stageState[key].detail = detail;
+  renderStages();
 }
 
 // ---- parsing: each row is (寬度, 訂量) = a tube-segment width and how many
@@ -899,7 +926,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
   const itemsList = patternsFull.map((p) => p.items);
   const counts = itemsList.map(patternToCounts);
   const lp1 = buildLP(itemsList, counts, widths, demand, { mode: "max_fulfill" });
-  setStatus(`${tag}：求解最大排產量中（最多 ${t1} 秒）...`, "busy", t1);
+  setStatus(`${tag}：求解最大排產量中...`, "busy");
+  beginStage("fulfill", `${tag}：求解最大排產量中`, t1);
   await yieldToUI();
   const sol1 = await solveMaxFulfillConcurrent(lp1, t1);
   const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
@@ -909,7 +937,8 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     fulfillFloor,
     weightFn: (w) => w,
   });
-  setStatus(`${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中（最多 ${t1} 秒）...`, "busy", t1);
+  setStatus(`${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中...`, "busy");
+  beginStage("fulfill", `${tag}：最大排產量 ${fulfillFloor} 件，求解大尺寸優先分配中`, t1);
   await yieldToUI();
   const solPriority = await solveLP(lpPriority, t1);
   let extPriority = extractPatternSolution(solPriority, patternsFull, widths);
@@ -920,13 +949,15 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
   }
   const priorityFloor = {};
   for (const w of widths) priorityFloor[String(w)] = extPriority.produced[String(w)] || 0;
+  finishStage("fulfill", `${tag}：狀態 ${solPriority ? solPriority.Status : "Failed"}，共 ${extPriority.totalProduced} 件`);
 
   const lp2 = buildLP(itemsList, counts, widths, demand, {
     mode: "min_rolls",
     fulfillFloor,
     perWidthFloor: priorityFloor,
   });
-  setStatus(`${tag}：求解最少母管數中（最多 ${t2} 秒）...`, "busy", t2);
+  setStatus(`${tag}：求解最少母管數中...`, "busy");
+  beginStage("rolls", `${tag}：求解最少母管數中`, t2);
   await yieldToUI();
   const sol2 = await solveLP(lp2, t2);
 
@@ -937,14 +968,13 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     // which is already known to achieve them.
     ext = extPriority;
   }
+  const rollsCount = ext.rows.reduce((s, r) => s + r.count, 0);
+  finishStage("rolls", `${tag}：狀態 ${sol2 ? sol2.Status : "Failed"}，共 ${rollsCount} 支`);
 
   const deepSearchTimeLimitSec = getDeepSearchTimeLimitSec();
   const typesCap = deepSearchEnabled ? deepSearchTimeLimitSec : TYPE_MINIMIZATION_TIME_LIMIT_SEC;
-  setStatus(
-    `${tag}：最小化組合種類數中（${deepSearchEnabled ? "深度搜索，" : ""}最多 ${typesCap} 秒）...`,
-    "busy",
-    typesCap
-  );
+  setStatus(`${tag}：最小化組合種類數中${deepSearchEnabled ? "（深度搜索）" : ""}...`, "busy");
+  beginStage("types", `${tag}：最小化組合種類數中${deepSearchEnabled ? "（深度搜索）" : ""}`, typesCap);
   await yieldToUI();
   const typesResult = await minimizeTypeCount(
     widths,
@@ -956,6 +986,7 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
     deepSearchEnabled ? { patternsFull, patternCounts: counts, timeLimitSec: deepSearchTimeLimitSec } : null
   );
   const rows = typesResult.rows.slice().sort((a, b) => b.count - a.count);
+  finishStage("types", `${tag}：狀態 ${typesResult.status}，共 ${rows.length} 種`);
 
   return {
     solution: rows,
@@ -1385,9 +1416,11 @@ async function runPipeline() {
   try {
     const { widths, demand, orderRows } = parseOrders(els.ordersText.value);
     if (widths.length === 0) {
+      hideStages();
       setStatus("找不到有效的紙管需求資料，請確認格式為「寬度,數量」。", "idle");
       return;
     }
+    resetStages();
 
     setStatus("計算紙管組合計畫中...", "busy");
     await yieldToUI();

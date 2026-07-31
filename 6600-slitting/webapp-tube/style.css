@@ -303,6 +303,43 @@ button.full { width: 100%; margin-top: 4px; }
 }
 .status-banner.state-warn .progress-fill { background: #a15c00; }
 
+.stage-tracker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(37, 99, 235, 0.15);
+}
+
+.stage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  opacity: 0.5;
+}
+
+.stage-item.is-active { opacity: 1; }
+.stage-item.is-done { opacity: 0.85; }
+
+.stage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.stage-seconds {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-detail {
+  font-size: 0.75rem;
+}
+
+.stage-item .progress-track { height: 4px; }
+
 .status-banner.state-busy {
   background: var(--accent-soft);
   border-color: #cfe0ff;
