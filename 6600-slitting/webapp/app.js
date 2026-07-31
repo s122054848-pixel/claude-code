@@ -1590,7 +1590,7 @@ async function runPipeline(mode) {
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 60);
     const deepSearchEnabled = isDeepSearchMode();
     const t2 = deepSearchEnabled
-      ? Math.max(1, Number(els.timeLimit2Deep.value) || 300)
+      ? Math.max(1, Number(els.timeLimit2Deep.value) || 90)
       : Math.max(1, Number(els.timeLimit2Fast.value) || 45);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {

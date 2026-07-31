@@ -1036,7 +1036,7 @@ function readLengthList(ids) {
 async function runTubePlan(demand, widths) {
   const deepSearchEnabled = isDeepSearchMode();
   const tubeStageCap = deepSearchEnabled
-    ? Math.max(1, Math.round(Number(els.tubeStageTimeLimitDeep.value)) || 300)
+    ? Math.max(1, Math.round(Number(els.tubeStageTimeLimitDeep.value)) || 90)
     : Math.max(1, Math.round(Number(els.tubeStageTimeLimitFast.value)) || 45);
   const round1Lengths = readLengthList(["tubeLen1", "tubeLen2", "tubeLen3", "tubeLen4"]);
   const round2Lengths = readLengthList(["tubeR2Len1", "tubeR2Len2", "tubeR2Len3", "tubeR2Len4"]);
