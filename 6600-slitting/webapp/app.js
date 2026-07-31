@@ -785,13 +785,13 @@ function extractPatternSolution(sol, patternsFull, widths) {
 const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 15;
 const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
-// Each worker samples a fraction of the reduced-cost candidate pool
-// (rather than a fixed absolute count) so the sample scales with the
-// instance: a small pool (e.g. a 37-width order) isn't artificially
-// capped well below what a fixed 200 would already cover, and a huge
-// pool (e.g. 664 candidates) still gets cut down enough to stay
-// MIP-tractable within the deep-search time budget.
-const DEEP_SEARCH_SAMPLE_FRACTION = 0.5;
+// Each worker samples this fraction of the reduced-cost candidate pool.
+// At 1.0 (every worker gets the full pool), there's no sampling
+// diversity left between workers, so deepSearchMinTypes also varies
+// random_seed/mip_heuristic_effort per worker (same trick as
+// solveMaxFulfillConcurrent) so the parallelism still does something
+// useful instead of N workers redundantly solving the identical problem.
+const DEEP_SEARCH_SAMPLE_FRACTION = 1.0;
 
 // Deep search's per-worker search budget is user-configurable (separate
 // from Round1/Round2's own timeLimit1/timeLimit2 fields, which govern the
@@ -858,7 +858,7 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
   const cappedTimeLimit = deepSearchTimeLimitSec;
   const hardMs = hardTimeoutMsFor(cappedTimeLimit);
 
-  const jobs = pool.map(async (worker) => {
+  const jobs = pool.map(async (worker, idx) => {
     const shuffled = candIdx.slice();
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -882,6 +882,8 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
           output_flag: false,
           mip_rel_gap: MIP_REL_GAP,
           mip_abs_gap: 2,
+          random_seed: idx,
+          mip_heuristic_effort: Math.min(0.95, 0.05 + idx * (0.9 / Math.max(1, pool.length - 1))),
         }),
         hardMs
       );
