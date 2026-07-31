@@ -724,7 +724,12 @@ function extractPatternSolution(sol, patternsFull, widths) {
 const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 15;
 const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
-const DEEP_SEARCH_SAMPLE_SIZE = 200;
+// Each worker samples a fraction of the reduced-cost candidate pool
+// (rather than a fixed absolute count) so the sample scales with the
+// instance: a small pool isn't artificially capped well below what a
+// fixed 200 would already cover, and a huge pool still gets cut down
+// enough to stay MIP-tractable within the deep-search time budget.
+const DEEP_SEARCH_SAMPLE_FRACTION = 0.5;
 
 // Deep search's per-worker search budget is user-configurable (separate
 // from the tube-stage's own time-limit field, which governs the much
@@ -795,7 +800,8 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    const sampledIdx = shuffled.slice(0, DEEP_SEARCH_SAMPLE_SIZE);
+    const sampleSize = Math.max(1, Math.round(shuffled.length * DEEP_SEARCH_SAMPLE_FRACTION));
+    const sampledIdx = shuffled.slice(0, sampleSize);
     const poolPatterns = rows.map((r) => r.items).concat(sampledIdx.map((i) => patterns[i]));
     const poolCounts = poolPatterns.map(patternToCounts);
     const poolPatternsFull = rows.map((r) => ({ ...r })).concat(sampledIdx.map((i) => patternsFull[i]));
