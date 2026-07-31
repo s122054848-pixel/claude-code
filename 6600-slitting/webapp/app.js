@@ -907,25 +907,41 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
   const cappedTimeLimit = deepSearchTimeLimitSec;
   const hardMs = hardTimeoutMsFor(cappedTimeLimit);
 
-  const jobs = pool.map(async (worker, idx) => {
-    const shuffled = candIdx.slice();
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  // Same early-exit-on-"Optimal" pattern as solveMaxFulfillOneRound: a
+  // worker that PROVES its sample's minimum type count can't be beaten by
+  // another worker still searching, so there's no reason to wait out the
+  // rest of the time budget once one arrives. Without this, a worker that
+  // proves optimal in a few seconds still sat idle until every other
+  // worker's full time_limit expired.
+  const best = await new Promise((resolve) => {
+    let settled = false;
+    let bestSoFar = null;
+    let remaining = pool.length;
+
+    function settle(result) {
+      if (settled) return;
+      settled = true;
+      resolve(result);
     }
-    const sampleSize = Math.max(1, Math.round(shuffled.length * DEEP_SEARCH_SAMPLE_FRACTION));
-    const sampledIdx = shuffled.slice(0, sampleSize);
-    const poolPatterns = rows.map((r) => r.items).concat(sampledIdx.map((i) => patterns[i]));
-    const poolCounts = poolPatterns.map(patternToCounts);
-    const poolPatternsFull = rows.map((r) => ({ ...r })).concat(sampledIdx.map((i) => patternsFull[i]));
-    const lp = buildLP(poolPatterns, poolCounts, widths, demand, {
-      ...baseOpts,
-      mode: "min_types",
-      rollCap: totalRolls,
-    });
-    let sol;
-    try {
-      sol = await withHardTimeout(
+
+    pool.forEach((worker, idx) => {
+      const shuffled = candIdx.slice();
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      const sampleSize = Math.max(1, Math.round(shuffled.length * DEEP_SEARCH_SAMPLE_FRACTION));
+      const sampledIdx = shuffled.slice(0, sampleSize);
+      const poolPatterns = rows.map((r) => r.items).concat(sampledIdx.map((i) => patterns[i]));
+      const poolCounts = poolPatterns.map(patternToCounts);
+      const poolPatternsFull = rows.map((r) => ({ ...r })).concat(sampledIdx.map((i) => patternsFull[i]));
+      const lp = buildLP(poolPatterns, poolCounts, widths, demand, {
+        ...baseOpts,
+        mode: "min_types",
+        rollCap: totalRolls,
+      });
+
+      withHardTimeout(
         solveOnWorker(worker, lp, {
           time_limit: cappedTimeLimit,
           output_flag: false,
@@ -935,23 +951,30 @@ async function deepSearchMinTypes(patternsFull, patternCounts, widths, demand, b
           mip_heuristic_effort: Math.min(0.95, 0.05 + idx * (0.9 / Math.max(1, pool.length - 1))),
         }),
         hardMs
-      );
-    } catch (err) {
-      return null;
-    }
-    const ext = extractPatternSolution(sol, poolPatternsFull, widths);
-    const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
-    if (sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5) {
-      return { rows: ext.rows, produced: ext.produced, status: sol.Status };
-    }
-    return null;
+      )
+        .then((sol) => {
+          const ext = extractPatternSolution(sol, poolPatternsFull, widths);
+          const extRolls = ext.rows.reduce((s, r) => s + r.count, 0);
+          const valid = sol && extRolls > 0 && extRolls <= totalRolls + 0.5 && ext.totalProduced >= totalPieces - 0.5;
+          if (!valid) return;
+          const result = { rows: ext.rows, produced: ext.produced, status: sol.Status };
+          if (sol.Status === "Optimal") {
+            settle(result);
+            pool.forEach((_, i) => {
+              if (i !== idx) replacePoolWorker(pool, i);
+            });
+            return;
+          }
+          if (!bestSoFar || result.rows.length < bestSoFar.rows.length) bestSoFar = result;
+        })
+        .catch(() => {})
+        .then(() => {
+          remaining--;
+          if (remaining === 0) settle(bestSoFar);
+        });
+    });
   });
 
-  const results = await Promise.all(jobs);
-  let best = null;
-  for (const r of results) {
-    if (r && (!best || r.rows.length < best.rows.length)) best = r;
-  }
   if (best) return best;
   return { rows, produced, status: "Failed（未找到更少種類的可行解，維持原刀路）" };
 }
@@ -1590,7 +1613,7 @@ async function runPipeline(mode) {
     const priorityCap = Math.max(1, Math.round(Number(els.timeLimit1.value)) || 60);
     const deepSearchEnabled = isDeepSearchMode();
     const t2 = deepSearchEnabled
-      ? Math.max(1, Number(els.timeLimit2Deep.value) || 90)
+      ? Math.max(1, Number(els.timeLimit2Deep.value) || 300)
       : Math.max(1, Number(els.timeLimit2Fast.value) || 45);
 
     if (!Number.isFinite(motherWidth) || motherWidth <= 0) {
