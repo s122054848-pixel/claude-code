@@ -188,7 +188,11 @@ function renderStages() {
       e.fill.style.width = "0%";
       continue;
     }
-    const elapsedS = Math.round((Date.now() - s.start) / 1000);
+    // A finished stage's elapsed time is frozen at whatever finishStage
+    // recorded, not recomputed from Date.now() - otherwise it would keep
+    // counting up forever, since the shared tick interval only stops once
+    // EVERY stage is inactive (see finishStage below).
+    const elapsedS = s.active ? Math.round((Date.now() - s.start) / 1000) : s.finalElapsedS;
     e.seconds.textContent = `${elapsedS} 秒`;
     e.detail.textContent = s.detail;
     if (s.active) {
@@ -227,7 +231,13 @@ function finishStage(key, detail) {
   if (!stageState[key]) return;
   stageState[key].active = false;
   stageState[key].detail = detail;
+  stageState[key].finalElapsedS = Math.round((Date.now() - stageState[key].start) / 1000);
   renderStages();
+  const anyActive = STAGE_KEYS.some((k) => stageState[k] && stageState[k].active);
+  if (!anyActive && stageTickTimer) {
+    clearInterval(stageTickTimer);
+    stageTickTimer = null;
+  }
 }
 
 // ---- parsing ----
