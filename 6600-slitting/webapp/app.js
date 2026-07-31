@@ -783,7 +783,7 @@ function extractPatternSolution(sol, patternsFull, widths) {
 // production regression. Falls back to the input unchanged if it can't
 // find an equally-good solution in time.
 const TYPE_MINIMIZATION_TIME_LIMIT_SEC = 15;
-const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 45;
+const DEEP_SEARCH_TYPES_TIME_LIMIT_SEC = 90;
 const DEEP_SEARCH_RELAX_TIME_LIMIT_SEC = 30;
 // Each worker samples this fraction of the reduced-cost candidate pool.
 // At 1.0 (every worker gets the full pool), there's no sampling
