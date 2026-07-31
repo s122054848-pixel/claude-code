@@ -884,7 +884,7 @@ async function solveTubeStage(patternsFull, widths, demand, t1, t2, label, deepS
   const lp1 = buildLP(itemsList, counts, widths, demand, { mode: "max_fulfill" });
   setStatus(`${tag}：求解最大排產量中（最多 ${t1} 秒）...`, "busy", t1);
   await yieldToUI();
-  const sol1 = await solveLP(lp1, t1);
+  const sol1 = await solveMaxFulfillConcurrent(lp1, t1);
   const fulfillFloor = Math.round((sol1 && sol1.ObjectiveValue) || 0);
 
   const lpPriority = buildLP(itemsList, counts, widths, demand, {
@@ -1097,16 +1097,31 @@ function solveInWorker(lpText, options) {
 const WORKER_POOL_SIZE = Math.max(1, (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4);
 let workerPool = null;
 
+function createPoolWorker() {
+  const blob = new Blob([window.WORKER_BUNDLE_SOURCE], { type: "application/javascript" });
+  const blobUrl = URL.createObjectURL(blob);
+  return new Worker(blobUrl);
+}
+
 function getWorkerPool() {
   if (!workerPool) {
     workerPool = [];
-    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
-      const blob = new Blob([window.WORKER_BUNDLE_SOURCE], { type: "application/javascript" });
-      const blobUrl = URL.createObjectURL(blob);
-      workerPool.push(new Worker(blobUrl));
-    }
+    for (let i = 0; i < WORKER_POOL_SIZE; i++) workerPool.push(createPoolWorker());
   }
   return workerPool;
+}
+
+// Terminates and replaces one pool slot in place - used when a job is
+// abandoned mid-solve (see solveMaxFulfillConcurrent's early-exit below)
+// so a still-running orphaned computation doesn't delay whatever the pool
+// gets used for next.
+function replacePoolWorker(pool, idx) {
+  try {
+    pool[idx].terminate();
+  } catch (err) {
+    // ignore
+  }
+  pool[idx] = createPoolWorker();
 }
 
 function solveOnWorker(worker, lpText, options) {
@@ -1235,6 +1250,77 @@ async function solveLP(lpText, timeLimitSec, optionOverrides) {
   }
   const highs = await getHighsInline();
   return highs.solve(lpText, options);
+}
+
+// Unlike min_types (where different candidate-pattern SUBSETS create real
+// diversity), running the exact same max_fulfill problem on several
+// workers with identical options is pointless - HiGHS's B&B is
+// deterministic (verified: 4 workers solving the identical hard B1160
+// instance for 30s each all landed on the exact same 617-piece
+// incumbent). But HiGHS does expose `random_seed` and
+// `mip_heuristic_effort`, and varying those DOES genuinely diversify the
+// search (verified on the same instance/budget: seeds 0-3 landed on
+// 617/616/618/619 - a real, if modest, spread). Since every worker still
+// only runs for the same shared time_limit and they all run concurrently,
+// trying several seeds and keeping the best incumbent found is a "free"
+// quality improvement for the stage that decides the fulfillment rate
+// (the primary objective, ahead of roll count and pattern-type count) -
+// no extra wall-clock cost versus a single solve, unlike the min_types
+// deep-search checkbox which deliberately trades time for quality.
+//
+// Exits as soon as ANY worker reports "Optimal", instead of waiting for
+// all of them: a proven optimum can't be beaten by another seed, and
+// waiting anyway made already-easy instances measurably SLOWER than a
+// plain single solve (measured on T2085, all-Optimal case: seeds finished
+// anywhere from 5.8s to 31.3s apart despite agreeing on the same 1127
+// value, so Promise.all-style waiting for the slowest one added ~15s of
+// pure waste). The other pool slots are terminated and replaced (not just
+// abandoned) so a still-running orphaned computation can't delay whatever
+// the pool gets dispatched to next (e.g. the min_rolls stage right after).
+function solveMaxFulfillConcurrent(lpText, timeLimitSec) {
+  const pool = getWorkerPool();
+  const hardMs = hardTimeoutMsFor(timeLimitSec);
+  return new Promise((resolve) => {
+    let settled = false;
+    let bestSoFar = null;
+    let remaining = pool.length;
+
+    function settle(sol) {
+      if (settled) return;
+      settled = true;
+      resolve(sol);
+    }
+
+    pool.forEach((worker, idx) => {
+      withHardTimeout(
+        solveOnWorker(worker, lpText, {
+          time_limit: timeLimitSec,
+          output_flag: false,
+          mip_rel_gap: MIP_REL_GAP,
+          random_seed: idx,
+          mip_heuristic_effort: Math.min(0.95, 0.05 + idx * (0.9 / Math.max(1, pool.length - 1))),
+        }),
+        hardMs
+      )
+        .then((sol) => {
+          if (sol && sol.Status === "Optimal") {
+            settle(sol);
+            pool.forEach((_, i) => {
+              if (i !== idx) replacePoolWorker(pool, i);
+            });
+            return;
+          }
+          if (sol && Number.isFinite(sol.ObjectiveValue) && (!bestSoFar || sol.ObjectiveValue > bestSoFar.ObjectiveValue)) {
+            bestSoFar = sol;
+          }
+        })
+        .catch(() => {})
+        .then(() => {
+          remaining--;
+          if (remaining === 0) settle(bestSoFar);
+        });
+    });
+  });
 }
 
 function yieldToUI() {
