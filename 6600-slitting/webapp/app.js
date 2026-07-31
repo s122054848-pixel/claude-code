@@ -1389,11 +1389,11 @@ async function solveLP(lpText, timeLimitSec, optionOverrides) {
 // anywhere from 5.8s to 31.3s apart despite agreeing on the same 1127
 // value, so Promise.all-style waiting for the slowest one added ~15s of
 // pure waste). The other pool slots are terminated and replaced (not just
-// abandoned) so a still-running orphaned computation can't delay whatever
-// the pool gets dispatched to next (e.g. the min_rolls stage right after).
-function solveMaxFulfillConcurrent(lpText, timeLimitSec) {
+// abandoned) so a still-running orphaned computation can't delay the next
+// round (or whatever the pool gets dispatched to after this returns).
+function solveMaxFulfillOneRound(lpText, roundSeconds) {
   const pool = getWorkerPool();
-  const hardMs = hardTimeoutMsFor(timeLimitSec);
+  const hardMs = hardTimeoutMsFor(roundSeconds);
   return new Promise((resolve) => {
     let settled = false;
     let bestSoFar = null;
@@ -1408,11 +1408,14 @@ function solveMaxFulfillConcurrent(lpText, timeLimitSec) {
     pool.forEach((worker, idx) => {
       withHardTimeout(
         solveOnWorker(worker, lpText, {
-          time_limit: timeLimitSec,
+          time_limit: roundSeconds,
           output_flag: false,
           mip_rel_gap: MIP_REL_GAP,
-          random_seed: idx,
-          mip_heuristic_effort: Math.min(0.95, 0.05 + idx * (0.9 / Math.max(1, pool.length - 1))),
+          // Fresh random seed/effort each call (not a fixed per-slot
+          // value) so successive restart rounds explore genuinely
+          // different territory instead of repeating the same 4 runs.
+          random_seed: Math.floor(Math.random() * 1e6),
+          mip_heuristic_effort: 0.05 + Math.random() * 0.9,
         }),
         hardMs
       )
@@ -1435,6 +1438,33 @@ function solveMaxFulfillConcurrent(lpText, timeLimitSec) {
         });
     });
   });
+}
+
+// Splits the time budget into several ~30s restart rounds instead of one
+// long single-shot search: measured on a hard B1160 instance, restarting
+// with fresh random seeds every 30s reached a BETTER incumbent in the
+// same total wall-clock than one continuous run (90s as 3x30s rounds:
+// 623 pieces vs. a single 90s run's 622 - and 623 matched what a single
+// run needed a full 180s to reach). Rounds shorter than ~30s hurt instead
+// (tested 15s rounds: worse than either of the above) - each round needs
+// enough time to actually make B&B progress before being cut off, so
+// round length is floored at 30s and budgets under 60s just run once.
+function solveMaxFulfillConcurrent(lpText, timeLimitSec) {
+  const ROUND_SECONDS = 30;
+  const rounds = timeLimitSec >= ROUND_SECONDS * 2 ? Math.max(1, Math.floor(timeLimitSec / ROUND_SECONDS)) : 1;
+  const baseRoundSec = Math.floor(timeLimitSec / rounds);
+  const remainderSec = timeLimitSec - baseRoundSec * rounds;
+
+  return (async () => {
+    let best = null;
+    for (let r = 0; r < rounds; r++) {
+      const roundSeconds = baseRoundSec + (r === rounds - 1 ? remainderSec : 0);
+      const sol = await solveMaxFulfillOneRound(lpText, roundSeconds);
+      if (sol && (!best || sol.ObjectiveValue > best.ObjectiveValue)) best = sol;
+      if (sol && sol.Status === "Optimal") break; // can't do better - no point in further rounds
+    }
+    return best;
+  })();
 }
 
 function yieldToUI() {
