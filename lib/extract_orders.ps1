@@ -31,6 +31,20 @@
   share, e.g. "國3->台1嘉"). Only ~21%/~17% of customers have these set; build_dispatch.py
   falls back to geography-only grouping for customers without one.
 
+  Dimensions use LEFT OUTER JOIN to utu_file/utv_file, not a plain join: orders with
+  oea37=1 (平板/紙板, flat paperboard sold by the pallet rather than boxed under a model)
+  have NO utu_file model at all (oea40 is blank for every single one -- verified against
+  real data, confirmed via NOT EXISTS against 9856 such lines since 2026-06-01), so a
+  mandatory join to utu_file/utv_file silently drops them entirely -- they never showed up
+  in dispatch planning before this fix. Their real dimensions live directly on the order
+  line instead: oeb_file.oeb100/oeb101/oeb102 = width/length/thickness (mm), verified by
+  cross-checking against oeb06's free-text description ("紙板 2000x2198" etc. matches
+  oeb100/oeb101 exactly across dozens of samples; oeb102 varies too, so it's a real
+  per-order value, not a coincidental constant). NVL() falls back to these columns only
+  when the utv_file join comes back NULL (i.e. no model), so normal boxed orders are
+  unaffected -- verified: same 136 modeled lines, same dimensions, plus 187 newly-included
+  平板 lines, for a spot-checked date.
+
   Must run under 32-bit PowerShell (the installed Informix ODBC driver is 32-bit only):
     C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -Date 2026-07-08
 
@@ -69,15 +83,17 @@ SELECT
   o.occ02 AS ship_cust_name, o.occ732 AS ship_lat, o.occ733 AS ship_lng,
   o.occ735 AS route, o.occ734 AS main_road,
   b.oeb04 AS item_code, b.oeb12 AS qty_box, b.oeb03 AS line_no,
-  v.utv112 AS width_mm, v.utv113 AS length_mm, v.utv119 AS thickness_mm
-FROM oea_file a, oeb_file b, utu_file u, utv_file v, occ_file o
+  NVL(v.utv112, b.oeb100) AS width_mm,
+  NVL(v.utv113, b.oeb101) AS length_mm,
+  NVL(v.utv119, b.oeb102) AS thickness_mm
+FROM oea_file a
+JOIN oeb_file b ON a.oea01 = b.oeb01
+JOIN occ_file o ON a.oea04 = o.occ01
+LEFT OUTER JOIN utu_file u ON a.oea40 = u.utu01
+LEFT OUTER JOIN utv_file v ON u.utu01 = v.utv00
 WHERE a.oea02 = $mdy
   AND a.oeaconf = 'Y'
   AND SUBSTR(a.oea01,3,1) <> 'B'
-  AND a.oea01 = b.oeb01
-  AND a.oea40 = u.utu01
-  AND u.utu01 = v.utv00
-  AND a.oea04 = o.occ01
 ORDER BY a.oea04, a.oea01
 "@
 $da = New-Object System.Data.Odbc.OdbcDataAdapter($cmd)

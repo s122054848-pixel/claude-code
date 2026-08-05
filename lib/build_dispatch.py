@@ -15,11 +15,21 @@ import csv
 import json
 import math
 import os
+import sys
 import urllib.request
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
+# Some customer names use old 自造字 (private-use-area Unicode characters not in the console's
+# codepage) -- without this, printing a progress line for that one customer crashes the whole
+# run instead of just showing a "?" in place of the one character.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except AttributeError:
+        pass
 
 
 def _safe_float(value):
@@ -162,20 +172,40 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     with open(csv_path, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
-    # Build stack units: one physical "stack" = boxes piled to (near) truck height, footprint w x l
+    # Build stack units: one physical "stack" = boxes piled to (near) truck height, footprint w x l.
+    # Some items (e.g. 平板/紙板 flat paperboard sold by the pallet, no ERP model) are wider than
+    # the truck in BOTH horizontal orientations and can never lie flat -- for those, stand them up
+    # on edge instead: multiple panels side by side, each consuming its thickness along the floor
+    # (bounded by truck_w), with one panel's own edge as height (still bounded by truck_h, same as
+    # flat stacking) and the other edge as floor depth (checked against truck_l at placement time,
+    # same as flat mode). If neither edge fits within truck_h even standing up, it genuinely can't
+    # be loaded in this truck configuration -- skipped (not crashed) and reported at the end.
     stacks = []
+    skipped_oversized = []
     for r in rows:
         qty = _safe_float(r["qty_box"])
         w = _safe_float(r["width_mm"]); l = _safe_float(r["length_mm"]); t = _safe_float(r["thickness_mm"])
         if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
             continue
-        boxes_per_stack = max(1, math.floor(truck_h / t))
         lat = (r.get("ship_lat") or "").strip()
         lng = (r.get("ship_lng") or "").strip()
+
+        vertical = w > truck_w and l > truck_w
+        if vertical:
+            height_candidates = [d for d in (w, l) if d <= truck_h]
+            if not height_candidates:
+                skipped_oversized.append(r)
+                continue
+            height_dim = max(height_candidates)
+            depth_dim = l if height_dim == w else w
+            boxes_per_stack = max(1, math.floor(truck_w / t))
+        else:
+            boxes_per_stack = max(1, math.floor(truck_h / t))
+
         remaining = qty
         while remaining > 0:
             n = min(boxes_per_stack, remaining)
-            stacks.append({
+            stack = {
                 "order_no": r["order_no"],
                 "cust_code": r["ship_cust_code"].strip(),
                 "cust_name": r["ship_cust_name"].strip(),
@@ -184,9 +214,20 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "route": (r.get("route") or "").strip() or None,
                 "main_road": (r.get("main_road") or "").strip() or None,
                 "item_code": r["item_code"],
-                "boxes": n, "w": w, "l": l, "t": t, "height": n * t,
-            })
+                "boxes": n, "t": t,
+            }
+            if vertical:
+                stack.update(w=n * t, l=depth_dim, height=height_dim)
+            else:
+                stack.update(w=w, l=l, height=n * t)
+            stacks.append(stack)
             remaining -= n
+
+    if skipped_oversized:
+        print(f"WARNING: {len(skipped_oversized)} order line(s) exceed the truck's cross-section in every orientation (flat or standing) and were excluded from dispatch planning -- these need manual arrangement:")
+        for r in skipped_oversized:
+            print(f"  order={r['order_no']} cust={r['ship_cust_name'].strip()} item={r['item_code']} "
+                  f"dims={r['width_mm']}x{r['length_mm']}x{r['thickness_mm']}mm qty={r['qty_box']}")
 
     if not stacks:
         raise SystemExit(f"No usable order lines found in {csv_path}")
@@ -428,7 +469,12 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 lock_truck_grouping(cur, cust_code)
                 cur = new_truck()
                 if not try_place(cur, s):
-                    raise RuntimeError(f"stack too large for an empty truck: {s}")
+                    # genuinely doesn't fit an empty truck in any orientation -- the earlier
+                    # flat/vertical pre-check should catch this already, but skip rather than
+                    # crash the whole day's run if some other combination slips through.
+                    print(f"WARNING: stack does not fit an empty truck in any orientation, excluded: "
+                          f"order={s['order_no']} item={s['item_code']} w={s['w']} l={s['l']} height={s['height']}")
+                    continue
         trucks.append(cur)
         lock_truck_grouping(cur, cust_code)
 
