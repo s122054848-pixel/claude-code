@@ -59,67 +59,93 @@ def columns_per_pallet(bw, bl, eff_pw, eff_pl):
     return max(1, opt1, opt2)
 
 
-def merge_manual_on_top(stacks, max_total_height):
+def pack_manual_columns(order_lines, max_total_height):
     """手工疊車 only: 同客戶相鄰裝車序號可以疊在另一筆訂單的上方,只要不超過 max_total_height。
-    A same-customer stack whose footprint fits within an already-open column, and whose own
-    height still leaves that column under the cap, rides on top of it instead of claiming its
-    own floor space -- cuts truck count for customers with several partial-height orders.
+    Fills height budget across ORDERS at the box-quantity level, not as an all-or-nothing merge
+    of whole pre-sized stacks: a customer's later, smaller-footprint order first contributes as
+    many of its OWN boxes as fit into whatever headroom existing columns have left (riding on
+    top of them), and only whatever quantity doesn't fit that way starts fresh column(s) of its
+    own at the full height budget. E.g. order A fills a column to 1600/2200mm; order B (smaller
+    footprint, larger quantity) puts as many boxes as fit in the remaining 600mm on top of A,
+    and the rest of B's boxes become their own separate column -- so one order can end up split
+    across a shared column AND a dedicated one, which a whole-stack-at-a-time merge can't do.
+
     Different customers never share a column (nobody wants a stranger's freight resting on
-    theirs, and it breaks sequential unloading).
+    theirs, and it breaks sequential unloading). A column's footprint is fixed by whatever
+    order started it; a rider just needs to fit within that footprint, checked via sorted
+    dimension pairs so it doesn't matter which physical orientation the packer later places
+    the base in.
 
     Runs as a pre-placement pass (grouped by customer, decided before any truck is chosen)
     rather than opportunistically during placement the way the demo Artifact's JS does it --
     this tool's packer is a flat 2D shelf packer with no "column" concept to hook into, so this
     achieves the same physical/business outcome without rebuilding the packer around a
-    stacking-aware placement pass. A merged stack's own "height" grows to the full column's
+    stacking-aware placement pass. A column base's own "height" grows to the full column
     height (so the existing volume/placement math needs no changes at all); its true own
     height is stashed in "_own_height" and each rider is stashed in "_children" (with its own
     y0 offset) so the report-building step can split them back into separate rows later.
 
-    Footprint containment is checked on SORTED dimension pairs (min<=min, max<=max) rather
-    than a fixed axis -- the packer decides which physical orientation a stack actually gets
-    placed in later, and a rider that fits the base in EITHER orientation will still fit
-    whichever one the base ends up using.
+    `order_lines` are UNCHUNKED: one dict per order line (order_no, cust_code, cust_name, lat,
+    lng, route, main_road, item_code, box_w, box_l, t, qty) -- chunking into height-capped
+    stacks happens here, per column, instead of upfront, since how much of an order's quantity
+    goes on an existing column vs. a fresh one isn't known until this pass runs.
     """
     by_cust = {}
-    for s in stacks:
-        by_cust.setdefault(s["cust_code"], []).append(s)
+    for ol in order_lines:
+        by_cust.setdefault(ol["cust_code"], []).append(ol)
 
-    merged = []
-    for cust_stacks in by_cust.values():
+    stacks = []
+    for cust_lines in by_cust.values():
         # largest footprint first -- a rider can only go on top of something whose footprint
-        # it fits WITHIN, so the biggest items have to become column bases before anything
+        # it fits WITHIN, so the biggest orders have to become column bases before anything
         # smaller is considered for them.
-        cust_stacks.sort(key=lambda s: -(s["w"] * s["l"]))
-        columns = []  # each: {"base": stack dict, "used_height": float}
-        for s in cust_stacks:
-            s_lo, s_hi = sorted((s["w"], s["l"]))
-            placed_on = None
+        cust_lines.sort(key=lambda ol: -(ol["box_w"] * ol["box_l"]))
+        columns = []  # each: {"w":, "l":, "used_height": float, "base": stack dict}
+        for ol in cust_lines:
+            t = ol["t"]
+            remaining = ol["qty"]
+            lo, hi = sorted((ol["box_w"], ol["box_l"]))
+
             for col in columns:
-                base = col["base"]
-                if s["height"] > max_total_height - col["used_height"]:
-                    continue
-                b_lo, b_hi = sorted((base["w"], base["l"]))
-                if s_lo <= b_lo and s_hi <= b_hi:
-                    placed_on = col
+                if remaining <= 0:
                     break
-            if placed_on is not None:
-                child = dict(s)
-                child["y0"] = placed_on["used_height"]
-                base = placed_on["base"]
-                base.setdefault("_children", []).append(child)
-                base["height"] += s["height"]
-                placed_on["used_height"] += s["height"]
-            else:
-                s["y0"] = 0.0
-                s["_own_height"] = s["height"]
-                columns.append({"base": s, "used_height": s["height"]})
-        merged.extend(col["base"] for col in columns)
-    return merged
+                b_lo, b_hi = sorted((col["w"], col["l"]))
+                if not (lo <= b_lo and hi <= b_hi):
+                    continue
+                n = min(remaining, math.floor((max_total_height - col["used_height"]) / t))
+                if n <= 0:
+                    continue
+                child = {
+                    "order_no": ol["order_no"], "cust_code": ol["cust_code"], "cust_name": ol["cust_name"],
+                    "lat": ol["lat"], "lng": ol["lng"], "route": ol["route"], "main_road": ol["main_road"],
+                    "item_code": ol["item_code"], "boxes": n, "t": t,
+                    "box_w": ol["box_w"], "box_l": ol["box_l"],
+                    "height": n * t, "y0": col["used_height"],
+                }
+                col["base"].setdefault("_children", []).append(child)
+                col["base"]["height"] += n * t
+                col["used_height"] += n * t
+                remaining -= n
+
+            boxes_per_stack = max(1, math.floor(max_total_height / t))
+            while remaining > 0:
+                n = min(boxes_per_stack, remaining)
+                stack = {
+                    "order_no": ol["order_no"], "cust_code": ol["cust_code"], "cust_name": ol["cust_name"],
+                    "lat": ol["lat"], "lng": ol["lng"], "route": ol["route"], "main_road": ol["main_road"],
+                    "item_code": ol["item_code"], "boxes": n, "t": t,
+                    "box_w": ol["box_w"], "box_l": ol["box_l"],
+                    "w": ol["box_w"], "l": ol["box_l"],
+                    "height": n * t, "y0": 0.0, "_own_height": n * t,
+                }
+                columns.append({"w": ol["box_w"], "l": ol["box_l"], "used_height": n * t, "base": stack})
+                stacks.append(stack)
+                remaining -= n
+    return stacks
 
 
 def expand_items_with_children(items):
-    """Unpacks each merged manual-mode column (see merge_manual_on_top) back into one report
+    """Unpacks each merged manual-mode column (see pack_manual_columns) back into one report
     row per physical order: the base keeps its own true height, and each rider becomes its own
     entry inheriting the base's floor position (x/y/dx/dy) -- they occupy the same footprint
     slot, just a different height band (y0..y0+height). No-op for stacks that were never
@@ -297,8 +323,18 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT. load_mode == "manual": no pallet, footprint is just
     # the box's own dimensions, no base height, cargo capped at the full MAX_TOTAL_HEIGHT --
     # matches the demo Artifact's two modes exactly (same constants, same formulas).
+    # manual mode's flat (non-vertical) items are deferred to pack_manual_columns below instead
+    # of being chunked into stacks right here -- how much of an order's quantity ends up riding
+    # on an existing column vs. starting a fresh one isn't known until that pass runs, since it
+    # depends on what headroom OTHER same-customer orders happen to leave behind. Vertical
+    # (oversized-cross-section) stacks don't participate: their "boxes_per_stack" already means
+    # something different (how many panels fit side by side along truck_w, not a height budget
+    # each panel accumulates into), so folding them into the same column-filling logic would mix
+    # two incompatible chunking rules -- they're rare enough (~1 in 330 lines on a real day) that
+    # keeping them as their own independent stacks, same as pallet mode, is the pragmatic choice.
     manual = load_mode == "manual"
     stacks = []
+    manual_flat_lines = []
     skipped_oversized = []
     for r in rows:
         qty = _safe_float(r["qty_box"])
@@ -317,21 +353,50 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             height_dim = max(height_candidates)
             depth_dim = l if height_dim == w else w
             boxes_per_stack = max(1, math.floor(truck_w / t))
-        elif manual:
-            foot_w, foot_l, cols, base_height = w, l, 1, 0.0
-            boxes_per_stack = max(1, math.floor(MAX_TOTAL_HEIGHT / t))
-        else:
-            pallet = choose_pallet(w, l, overhang_w, overhang_l)
-            nom_w, nom_l = pallet if pallet else (w, l)
-            foot_w, foot_l = nom_w + overhang_w, nom_l + overhang_l
-            cols = columns_per_pallet(w, l, foot_w, foot_l)
-            base_height = PALLET_BASE_HEIGHT
-            boxes_per_stack = cols * max(1, math.floor((MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT) / t))
+
+            remaining = qty
+            while remaining > 0:
+                n = min(boxes_per_stack, remaining)
+                stacks.append({
+                    "order_no": r["order_no"],
+                    "cust_code": r["ship_cust_code"].strip(),
+                    "cust_name": r["ship_cust_name"].strip(),
+                    "lat": float(lat) if lat else None,
+                    "lng": float(lng) if lng else None,
+                    "route": (r.get("route") or "").strip() or None,
+                    "main_road": (r.get("main_road") or "").strip() or None,
+                    "item_code": r["item_code"],
+                    "boxes": n, "t": t, "box_w": w, "box_l": l,
+                    "w": n * t, "l": depth_dim, "height": height_dim,
+                })
+                remaining -= n
+            continue
+
+        if manual:
+            manual_flat_lines.append({
+                "order_no": r["order_no"],
+                "cust_code": r["ship_cust_code"].strip(),
+                "cust_name": r["ship_cust_name"].strip(),
+                "lat": float(lat) if lat else None,
+                "lng": float(lng) if lng else None,
+                "route": (r.get("route") or "").strip() or None,
+                "main_road": (r.get("main_road") or "").strip() or None,
+                "item_code": r["item_code"],
+                "box_w": w, "box_l": l, "t": t, "qty": qty,
+            })
+            continue
+
+        pallet = choose_pallet(w, l, overhang_w, overhang_l)
+        nom_w, nom_l = pallet if pallet else (w, l)
+        foot_w, foot_l = nom_w + overhang_w, nom_l + overhang_l
+        cols = columns_per_pallet(w, l, foot_w, foot_l)
+        boxes_per_stack = cols * max(1, math.floor((MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT) / t))
 
         remaining = qty
         while remaining > 0:
             n = min(boxes_per_stack, remaining)
-            stack = {
+            layers_used = math.ceil(n / cols)
+            stacks.append({
                 "order_no": r["order_no"],
                 "cust_code": r["ship_cust_code"].strip(),
                 "cust_name": r["ship_cust_name"].strip(),
@@ -341,23 +406,18 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "main_road": (r.get("main_road") or "").strip() or None,
                 "item_code": r["item_code"],
                 "boxes": n, "t": t, "box_w": w, "box_l": l,
-            }
-            if vertical:
-                stack.update(w=n * t, l=depth_dim, height=height_dim)
-            else:
-                layers_used = math.ceil(n / cols)
-                stack.update(w=foot_w, l=foot_l, height=base_height + layers_used * t)
-            stacks.append(stack)
+                "w": foot_w, "l": foot_l, "height": PALLET_BASE_HEIGHT + layers_used * t,
+            })
             remaining -= n
+
+    if manual_flat_lines:
+        stacks.extend(pack_manual_columns(manual_flat_lines, MAX_TOTAL_HEIGHT))
 
     if skipped_oversized:
         print(f"WARNING: {len(skipped_oversized)} order line(s) exceed the truck's cross-section in every orientation (flat or standing) and were excluded from dispatch planning -- these need manual arrangement:")
         for r in skipped_oversized:
             print(f"  order={r['order_no']} cust={r['ship_cust_name'].strip()} item={r['item_code']} "
                   f"dims={r['width_mm']}x{r['length_mm']}x{r['thickness_mm']}mm qty={r['qty_box']}")
-
-    if manual:
-        stacks = merge_manual_on_top(stacks, MAX_TOTAL_HEIGHT)
 
     if not stacks:
         raise SystemExit(f"No usable order lines found in {csv_path}")
@@ -612,7 +672,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
 
     truck_out = []
     for ti, t in enumerate(trucks, start=1):
-        # manual mode's merged columns (see merge_manual_on_top) travel as one placeable unit
+        # manual mode's merged columns (see pack_manual_columns) travel as one placeable unit
         # through packing/consolidation -- unpack each rider back into its own report row here.
         items = expand_items_with_children([it for row in t["rows"] for it in row["items"]])
         # 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積除以整台
