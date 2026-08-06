@@ -652,14 +652,15 @@ function renderCanvas(t) {
     const color = paletteColor(it.c, DATA.customers.length, dark);
     const x0 = it.x, x1 = it.x + it.dx;
     const z0 = it.y, z1 = it.y + it.dy; // note: item.y is truck-width axis (z)
-    const y1 = it.h;
+    const y0 = it.y0 || 0; // manual-mode on-top stacking: height this item's own base sits at
+    const y1 = y0 + it.h;
 
     // top face
     poly([P(x0,y1,z0), P(x1,y1,z0), P(x1,y1,z1), P(x0,y1,z1)], color, dark ? '#000' : '#0002', 1);
     // front face (z0 side)
-    poly([P(x0,0,z0), P(x1,0,z0), P(x1,y1,z0), P(x0,y1,z0)], shade(color, 0.78), dark ? '#000' : '#0002');
+    poly([P(x0,y0,z0), P(x1,y0,z0), P(x1,y1,z0), P(x0,y1,z0)], shade(color, 0.78), dark ? '#000' : '#0002');
     // side face (x1 side)
-    poly([P(x1,0,z0), P(x1,0,z1), P(x1,y1,z1), P(x1,y1,z0)], shade(color, 0.6), dark ? '#000' : '#0002');
+    poly([P(x1,y0,z0), P(x1,y0,z1), P(x1,y1,z1), P(x1,y1,z0)], shade(color, 0.6), dark ? '#000' : '#0002');
   });
 
   // truck wireframe edges (front pillars + top outline) drawn last for clarity
@@ -696,9 +697,10 @@ document.getElementById('sim').addEventListener('mousemove', (e) => {
   // hit-test top faces roughly via bounding polygon of projected top face
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    const x0 = it.x, x1 = it.x + it.dx, z0 = it.y, z1 = it.y + it.dy, y1 = it.h;
+    const x0 = it.x, x1 = it.x + it.dx, z0 = it.y, z1 = it.y + it.dy;
+    const y0 = it.y0 || 0, y1 = y0 + it.h;
     const pts = [canvas._P(x0,y1,z0), canvas._P(x1,y1,z0), canvas._P(x1,y1,z1), canvas._P(x0,y1,z1),
-                 canvas._P(x0,0,z0)];
+                 canvas._P(x0,y0,z0)];
     const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
     if (mx >= Math.min(...xs) && mx <= Math.max(...xs) && my >= Math.min(...ys) && my <= Math.max(...ys)) {
       hit = it; break;

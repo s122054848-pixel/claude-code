@@ -32,6 +32,116 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
+# pallet mode: standard pallet SKUs a box gets snapped to (mm), base height reserved under
+# the cargo, and the shared 2200mm total-height cap both modes stack up against (matches the
+# demo Artifact's PALLET_OPTIONS/PALLET_BASE_HEIGHT/PALLET_MAX_TOTAL_HEIGHT exactly, so the
+# same real-world truck load produces the same numbers in both tools).
+PALLET_OPTIONS = [(1100.0, 1100.0), (1100.0, 1300.0)]
+PALLET_BASE_HEIGHT = 150.0
+MAX_TOTAL_HEIGHT = 2200.0
+
+
+def choose_pallet(w, l, overhang_w, overhang_l):
+    """Smallest standard pallet SKU (from PALLET_OPTIONS) the box fits on, allowing it to
+    overhang the pallet edge by up to overhang_w/overhang_l per axis. None if the box is too
+    big for any of them (falls back to using the box's own footprint as its "pallet")."""
+    for pw, pl in PALLET_OPTIONS:
+        eff_pw, eff_pl = pw + overhang_w, pl + overhang_l
+        if (w <= eff_pw and l <= eff_pl) or (w <= eff_pl and l <= eff_pw):
+            return pw, pl
+    return None
+
+
+def columns_per_pallet(bw, bl, eff_pw, eff_pl):
+    """How many boxes fit side by side on one pallet layer, trying both box orientations."""
+    opt1 = math.floor(eff_pw / bw) * math.floor(eff_pl / bl)
+    opt2 = math.floor(eff_pw / bl) * math.floor(eff_pl / bw)
+    return max(1, opt1, opt2)
+
+
+def merge_manual_on_top(stacks, max_total_height):
+    """手工疊車 only: 同客戶相鄰裝車序號可以疊在另一筆訂單的上方,只要不超過 max_total_height。
+    A same-customer stack whose footprint fits within an already-open column, and whose own
+    height still leaves that column under the cap, rides on top of it instead of claiming its
+    own floor space -- cuts truck count for customers with several partial-height orders.
+    Different customers never share a column (nobody wants a stranger's freight resting on
+    theirs, and it breaks sequential unloading).
+
+    Runs as a pre-placement pass (grouped by customer, decided before any truck is chosen)
+    rather than opportunistically during placement the way the demo Artifact's JS does it --
+    this tool's packer is a flat 2D shelf packer with no "column" concept to hook into, so this
+    achieves the same physical/business outcome without rebuilding the packer around a
+    stacking-aware placement pass. A merged stack's own "height" grows to the full column's
+    height (so the existing volume/placement math needs no changes at all); its true own
+    height is stashed in "_own_height" and each rider is stashed in "_children" (with its own
+    y0 offset) so the report-building step can split them back into separate rows later.
+
+    Footprint containment is checked on SORTED dimension pairs (min<=min, max<=max) rather
+    than a fixed axis -- the packer decides which physical orientation a stack actually gets
+    placed in later, and a rider that fits the base in EITHER orientation will still fit
+    whichever one the base ends up using.
+    """
+    by_cust = {}
+    for s in stacks:
+        by_cust.setdefault(s["cust_code"], []).append(s)
+
+    merged = []
+    for cust_stacks in by_cust.values():
+        # largest footprint first -- a rider can only go on top of something whose footprint
+        # it fits WITHIN, so the biggest items have to become column bases before anything
+        # smaller is considered for them.
+        cust_stacks.sort(key=lambda s: -(s["w"] * s["l"]))
+        columns = []  # each: {"base": stack dict, "used_height": float}
+        for s in cust_stacks:
+            s_lo, s_hi = sorted((s["w"], s["l"]))
+            placed_on = None
+            for col in columns:
+                base = col["base"]
+                if s["height"] > max_total_height - col["used_height"]:
+                    continue
+                b_lo, b_hi = sorted((base["w"], base["l"]))
+                if s_lo <= b_lo and s_hi <= b_hi:
+                    placed_on = col
+                    break
+            if placed_on is not None:
+                child = dict(s)
+                child["y0"] = placed_on["used_height"]
+                base = placed_on["base"]
+                base.setdefault("_children", []).append(child)
+                base["height"] += s["height"]
+                placed_on["used_height"] += s["height"]
+            else:
+                s["y0"] = 0.0
+                s["_own_height"] = s["height"]
+                columns.append({"base": s, "used_height": s["height"]})
+        merged.extend(col["base"] for col in columns)
+    return merged
+
+
+def expand_items_with_children(items):
+    """Unpacks each merged manual-mode column (see merge_manual_on_top) back into one report
+    row per physical order: the base keeps its own true height, and each rider becomes its own
+    entry inheriting the base's floor position (x/y/dx/dy) -- they occupy the same footprint
+    slot, just a different height band (y0..y0+height). No-op for stacks that were never
+    merged (pallet mode, or a manual stack that never got a rider)."""
+    expanded = []
+    for it in items:
+        children = it.get("_children")
+        if not children:
+            base = dict(it)
+            base.setdefault("y0", 0.0)
+            expanded.append(base)
+            continue
+        base = dict(it)
+        base["height"] = base.pop("_own_height", base["height"])
+        base.pop("_children", None)
+        base.setdefault("y0", 0.0)
+        expanded.append(base)
+        for child in children:
+            expanded.append({**child, "x": it["x"], "y": it["y"], "dx": it["dx"], "dy": it["dy"]})
+    return expanded
+
+
 def _safe_float(value):
     """float(value), or None if blank/invalid -- ERP extracts occasionally have empty
     width_mm/length_mm/thickness_mm/qty_box cells, and those rows should be skipped like
@@ -168,7 +278,8 @@ def write_dispatch_xlsx(out_xlsx, header, rows):
     wb.save(out_xlsx)
 
 
-def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, template_path, out_xlsx=None):
+def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, template_path, out_xlsx=None,
+          load_mode="pallet", overhang_w=50.0, overhang_l=300.0):
     with open(csv_path, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
@@ -180,6 +291,13 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # flat stacking) and the other edge as floor depth (checked against truck_l at placement time,
     # same as flat mode). If neither edge fits within truck_h even standing up, it genuinely can't
     # be loaded in this truck configuration -- skipped (not crashed) and reported at the end.
+    #
+    # load_mode == "pallet": footprint snaps to a standard pallet SKU plus overhang allowance,
+    # base_height reserves room under the cargo for the pallet itself, cargo height capped at
+    # MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT. load_mode == "manual": no pallet, footprint is just
+    # the box's own dimensions, no base height, cargo capped at the full MAX_TOTAL_HEIGHT --
+    # matches the demo Artifact's two modes exactly (same constants, same formulas).
+    manual = load_mode == "manual"
     stacks = []
     skipped_oversized = []
     for r in rows:
@@ -199,8 +317,16 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             height_dim = max(height_candidates)
             depth_dim = l if height_dim == w else w
             boxes_per_stack = max(1, math.floor(truck_w / t))
+        elif manual:
+            foot_w, foot_l, cols, base_height = w, l, 1, 0.0
+            boxes_per_stack = max(1, math.floor(MAX_TOTAL_HEIGHT / t))
         else:
-            boxes_per_stack = max(1, math.floor(truck_h / t))
+            pallet = choose_pallet(w, l, overhang_w, overhang_l)
+            nom_w, nom_l = pallet if pallet else (w, l)
+            foot_w, foot_l = nom_w + overhang_w, nom_l + overhang_l
+            cols = columns_per_pallet(w, l, foot_w, foot_l)
+            base_height = PALLET_BASE_HEIGHT
+            boxes_per_stack = cols * max(1, math.floor((MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT) / t))
 
         remaining = qty
         while remaining > 0:
@@ -214,12 +340,13 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "route": (r.get("route") or "").strip() or None,
                 "main_road": (r.get("main_road") or "").strip() or None,
                 "item_code": r["item_code"],
-                "boxes": n, "t": t,
+                "boxes": n, "t": t, "box_w": w, "box_l": l,
             }
             if vertical:
                 stack.update(w=n * t, l=depth_dim, height=height_dim)
             else:
-                stack.update(w=w, l=l, height=n * t)
+                layers_used = math.ceil(n / cols)
+                stack.update(w=foot_w, l=foot_l, height=base_height + layers_used * t)
             stacks.append(stack)
             remaining -= n
 
@@ -228,6 +355,9 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         for r in skipped_oversized:
             print(f"  order={r['order_no']} cust={r['ship_cust_name'].strip()} item={r['item_code']} "
                   f"dims={r['width_mm']}x{r['length_mm']}x{r['thickness_mm']}mm qty={r['qty_box']}")
+
+    if manual:
+        stacks = merge_manual_on_top(stacks, MAX_TOTAL_HEIGHT)
 
     if not stacks:
         raise SystemExit(f"No usable order lines found in {csv_path}")
@@ -482,7 +612,9 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
 
     truck_out = []
     for ti, t in enumerate(trucks, start=1):
-        items = [it for row in t["rows"] for it in row["items"]]
+        # manual mode's merged columns (see merge_manual_on_top) travel as one placeable unit
+        # through packing/consolidation -- unpack each rider back into its own report row here.
+        items = expand_items_with_children([it for row in t["rows"] for it in row["items"]])
         # 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積除以整台
         # 車廂容積,才反映得出這台車實際裝了多少東西,而不是只看地板佔了多少。
         cargo_vol = sum(it["dx"] * it["dy"] * it["height"] for it in items)
@@ -512,7 +644,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     for t in truck_out:
         agg = {}
         for it in t["items"]:
-            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["w"], it["l"], it["t"])
+            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["box_w"], it["box_l"], it["t"])
             agg.setdefault(key, {"boxes": 0, "stacks": 0})
             agg[key]["boxes"] += it["boxes"]
             agg[key]["stacks"] += 1
@@ -543,11 +675,11 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             citems.append({
                 "x": round(it["x"], 1), "y": round(it["y"], 1),
                 "dx": round(it["dx"], 1), "dy": round(it["dy"], 1),
-                "h": round(it["height"], 1),
+                "h": round(it["height"], 1), "y0": round(it.get("y0", 0.0), 1),
                 "c": cust_index[it["cust_code"]],
                 "o": it["order_no"], "it": it["item_code"], "b": int(it["boxes"]),
             })
-            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["w"], it["l"], it["t"])
+            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["box_w"], it["box_l"], it["t"])
             agg.setdefault(key, {"boxes": 0, "stacks": 0})
             agg[key]["boxes"] += it["boxes"]
             agg[key]["stacks"] += 1
@@ -621,9 +753,15 @@ def main():
     ap.add_argument("--truck-l", type=float, default=8700.0, help="truck interior length, mm")
     ap.add_argument("--truck-w", type=float, default=2400.0, help="truck interior width, mm")
     ap.add_argument("--truck-h", type=float, default=2400.0, help="truck interior height, mm")
+    ap.add_argument("--load-mode", choices=["pallet", "manual"], default="pallet",
+                     help="pallet = forklift-loaded on standard pallets (default); manual = hand-stacked, "
+                          "no pallet, same-customer orders can stack on top of each other up to 2200mm")
+    ap.add_argument("--overhang-w", type=float, default=50.0, help="pallet mode: box overhang allowed past the pallet edge, width axis, mm")
+    ap.add_argument("--overhang-l", type=float, default=300.0, help="pallet mode: box overhang allowed past the pallet edge, length axis, mm")
     args = ap.parse_args()
 
-    build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template, args.out_xlsx)
+    build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template, args.out_xlsx,
+          load_mode=args.load_mode, overhang_w=args.overhang_w, overhang_l=args.overhang_l)
 
 
 if __name__ == "__main__":

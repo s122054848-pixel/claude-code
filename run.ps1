@@ -6,6 +6,7 @@
   Usage:
       .\run.ps1 -Date 2026-07-08
       .\run.ps1 -Date 2026-07-08 -TruckL 8700 -TruckW 2400 -TruckH 2400
+      .\run.ps1 -Date 2026-07-08 -LoadMode manual   # hand-stacked, no pallets (default: pallet)
       .\run.ps1 -Date 2026-07-08 -Open        # also opens the HTML report when done
 
   Requires:
@@ -18,6 +19,9 @@ param(
     [double]$TruckL,
     [double]$TruckW,
     [double]$TruckH,
+    [ValidateSet("pallet", "manual")][string]$LoadMode = "pallet",
+    [double]$OverhangW = 50,
+    [double]$OverhangL = 300,
     [switch]$Open
 )
 
@@ -49,7 +53,8 @@ python (Join-Path $root "lib\build_dispatch.py") `
     --csv $ordersCsv --date $Date `
     --template (Join-Path $root "lib\template.html") `
     --out-html $reportHtml --out-csv $dispatchCsv --out-xlsx $dispatchXlsx `
-    --truck-l $TruckL --truck-w $TruckW --truck-h $TruckH
+    --truck-l $TruckL --truck-w $TruckW --truck-h $TruckH `
+    --load-mode $LoadMode --overhang-w $OverhangW --overhang-l $OverhangL
 if ($LASTEXITCODE -ne 0) { throw "build_dispatch.py failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
