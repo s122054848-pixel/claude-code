@@ -31,19 +31,26 @@
   share, e.g. "國3->台1嘉"). Only ~21%/~17% of customers have these set; build_dispatch.py
   falls back to geography-only grouping for customers without one.
 
-  Dimensions use LEFT OUTER JOIN to utu_file/utv_file, not a plain join: orders with
-  oea37=1 (平板/紙板, flat paperboard sold by the pallet rather than boxed under a model)
-  have NO utu_file model at all (oea40 is blank for every single one -- verified against
-  real data, confirmed via NOT EXISTS against 9856 such lines since 2026-06-01), so a
-  mandatory join to utu_file/utv_file silently drops them entirely -- they never showed up
-  in dispatch planning before this fix. Their real dimensions live directly on the order
-  line instead: oeb_file.oeb100/oeb101/oeb102 = width/length/thickness (mm), verified by
-  cross-checking against oeb06's free-text description ("紙板 2000x2198" etc. matches
-  oeb100/oeb101 exactly across dozens of samples; oeb102 varies too, so it's a real
-  per-order value, not a coincidental constant). NVL() falls back to these columns only
-  when the utv_file join comes back NULL (i.e. no model), so normal boxed orders are
-  unaffected -- verified: same 136 modeled lines, same dimensions, plus 187 newly-included
-  平板 lines, for a spot-checked date.
+  Dimensions: orders with oea37=1 (平板/紙板, flat paperboard sold by the pallet rather than
+  boxed under a model) have NO utu_file model at all (oea40 is blank for every single one --
+  verified against real data, confirmed via NOT EXISTS against 9856 such lines since
+  2026-06-01), so a mandatory join to utu_file/utv_file silently drops them entirely -- they
+  never showed up in dispatch planning before this fix. Their real dimensions live directly
+  on the order line instead: oeb_file.oeb100/oeb101/oeb102 = width/length/thickness (mm),
+  verified by cross-checking against oeb06's free-text description ("紙板 2000x2198" etc.
+  matches oeb100/oeb101 exactly across dozens of samples; oeb102 varies too, so it's a real
+  per-order value, not a coincidental constant).
+
+  Model dimensions (utu_file/utv_file) are pulled as a SEPARATE small query and merged in
+  PowerShell below, rather than joined into the main query -- folding a LEFT OUTER JOIN to
+  utu_file/utv_file into the main join works fine against T10 but throws Informix's "retrieve
+  row by rowid" error against T6/路竹廠 (same class of issue as the shipped-lines split below;
+  this schema's joins get unstable past a certain size/shape on some plant databases, not a
+  syntax problem -- which shape trips it seems to depend on the specific database's data/plan).
+  Splitting it out sidesteps the query-plan issue on every plant this tool supports (T2/T10/
+  T3/T6). Falls back to oeb100/101/102 only when no model match exists, so normal boxed
+  orders are unaffected -- verified: same 136 modeled lines, same dimensions, plus 187
+  newly-included 平板 lines, for a spot-checked date.
 
   Must run under 32-bit PowerShell (the installed Informix ODBC driver is 32-bit only):
     C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -Date 2026-07-08
@@ -83,14 +90,10 @@ SELECT
   o.occ02 AS ship_cust_name, o.occ732 AS ship_lat, o.occ733 AS ship_lng,
   o.occ735 AS route, o.occ734 AS main_road,
   b.oeb04 AS item_code, b.oeb12 AS qty_box, b.oeb03 AS line_no,
-  NVL(v.utv112, b.oeb100) AS width_mm,
-  NVL(v.utv113, b.oeb101) AS length_mm,
-  NVL(v.utv119, b.oeb102) AS thickness_mm
+  a.oea40 AS model_code, b.oeb100 AS raw_width_mm, b.oeb101 AS raw_length_mm, b.oeb102 AS raw_thickness_mm
 FROM oea_file a
 JOIN oeb_file b ON a.oea01 = b.oeb01
 JOIN occ_file o ON a.oea04 = o.occ01
-LEFT OUTER JOIN utu_file u ON a.oea40 = u.utu01
-LEFT OUTER JOIN utv_file v ON u.utu01 = v.utv00
 WHERE a.oea02 = $mdy
   AND a.oeaconf = 'Y'
   AND SUBSTR(a.oea01,3,1) <> 'B'
@@ -99,6 +102,18 @@ ORDER BY a.oea04, a.oea01
 $da = New-Object System.Data.Odbc.OdbcDataAdapter($cmd)
 $dt = New-Object System.Data.DataTable
 $da.Fill($dt) | Out-Null
+
+# model dimensions -- see file header for why this has to be a separate query.
+$cmdDim = $conn.CreateCommand()
+$cmdDim.CommandTimeout = 90
+$cmdDim.CommandText = "SELECT u.utu01 AS model_code, v.utv112 AS width_mm, v.utv113 AS length_mm, v.utv119 AS thickness_mm FROM utu_file u, utv_file v WHERE u.utu01 = v.utv00"
+$daDim = New-Object System.Data.Odbc.OdbcDataAdapter($cmdDim)
+$dtDim = New-Object System.Data.DataTable
+$daDim.Fill($dtDim) | Out-Null
+$dimByModel = @{}
+foreach ($dimRow in $dtDim.Rows) {
+    $dimByModel[$dimRow["model_code"].ToString().Trim()] = $dimRow
+}
 
 # shipped-lines lookup -- see file header for why this has to be a separate query.
 $cmdShip = $conn.CreateCommand()
@@ -126,13 +141,25 @@ $excludedCount = 0
 foreach ($row in $dt.Rows) {
     $key = "$($row['order_no'].ToString().Trim())|$($row['line_no'])"
     if ($shippedSet.Contains($key)) { $excludedCount++; continue }
+
+    # 平板/紙板訂單 (oea37=1) have no utu_file model at all (model_code blank), so dimByModel
+    # never has an entry for them -- falls straight to the raw oeb100/101/102 columns already
+    # on this row. Normal modeled orders look up their real dimensions from utu_file/utv_file.
+    $modelCode = $row["model_code"].ToString().Trim()
+    $dimRow = if ($modelCode) { $dimByModel[$modelCode] } else { $null }
+    if ($dimRow) {
+        $widthMm = $dimRow["width_mm"]; $lengthMm = $dimRow["length_mm"]; $thicknessMm = $dimRow["thickness_mm"]
+    } else {
+        $widthMm = $row["raw_width_mm"]; $lengthMm = $row["raw_length_mm"]; $thicknessMm = $row["raw_thickness_mm"]
+    }
+
     $fields = @(
         (CsvField $row["order_no"]), (CsvField $row["order_date"]),
         (CsvField $row["ship_cust_code"]), (CsvField $row["ship_cust_name"]),
         (CsvField $row["ship_lat"]), (CsvField $row["ship_lng"]),
         (CsvField $row["route"]), (CsvField $row["main_road"]),
         (CsvField $row["item_code"]), (CsvField $row["qty_box"]),
-        (CsvField $row["width_mm"]), (CsvField $row["length_mm"]), (CsvField $row["thickness_mm"])
+        (CsvField $widthMm), (CsvField $lengthMm), (CsvField $thicknessMm)
     )
     $sw.WriteLine([string]::Join(",", $fields))
 }
