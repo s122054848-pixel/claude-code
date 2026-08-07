@@ -88,6 +88,17 @@ $mdyEnd = "MDY($($dEnd.Month),$($dEnd.Day),$($dEnd.Year))"
 $connStr = "DSN=$($db.dsn);DATABASE=$($db.database);UID=$($db.uid);PWD=$($db.pwd);"
 $conn = New-Object System.Data.Odbc.OdbcConnection($connStr)
 $conn.Open()
+
+# Dirty read (Informix's equivalent of SQL Server's WITH (NOLOCK)): every query below is a
+# read-only reference/order lookup, so it's fine to read rows another session hasn't committed
+# yet rather than wait on -- or fail against -- a lock. Intermittent "sqlerrm(utv_file)" Fill()
+# failures seen against the plain (default) isolation level look like exactly this: a query
+# briefly colliding with someone else's lock on utv_file, not a real data/schema problem (same
+# unconditional join has also succeeded plenty of times with no code change in between).
+$cmdIso = $conn.CreateCommand()
+$cmdIso.CommandText = "SET ISOLATION TO DIRTY READ"
+$cmdIso.ExecuteNonQuery() | Out-Null
+
 $cmd = $conn.CreateCommand()
 $cmd.CommandTimeout = 90
 $cmd.CommandText = @"
