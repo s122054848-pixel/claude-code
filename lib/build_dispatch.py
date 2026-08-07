@@ -17,6 +17,7 @@ import math
 import os
 import sys
 import urllib.request
+from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -39,6 +40,12 @@ for _stream in (sys.stdout, sys.stderr):
 PALLET_OPTIONS = [(1100.0, 1100.0), (1100.0, 1300.0)]
 PALLET_BASE_HEIGHT = 150.0
 MAX_TOTAL_HEIGHT = 2200.0
+
+# plant code -> display name, matching config.json's db.database value and the demo Artifact's
+# own PLANT_INFO table (which also carries each plant's depot lat/lng for route distance) --
+# the HTML report's client-side engine already has all four plants built in, so a report only
+# ever needs to say WHICH one this data belongs to, not repeat the address/coordinates here.
+PLANT_NAMES = {"T2": "龍潭廠", "T10": "雲林廠", "T3": "神岡廠", "T6": "路竹廠"}
 
 
 def choose_pallet(w, l, overhang_w, overhang_l):
@@ -213,6 +220,24 @@ def _safe_float(value):
         return None
 
 
+def _to_iso_date(value):
+    """Informix renders DATE columns through this ODBC/PowerShell path as US-format
+    "MM/DD/YYYY HH:MM:SS" (confirmed against a real extract), not ISO -- the HTML report's
+    client-side date-range filter does plain string comparison against "YYYY-MM-DD", so passing
+    the raw value through unconverted silently matches nothing and the report loads empty. Falls
+    back to passing the value through unchanged if it doesn't match the expected shape, rather
+    than raising, since a format Informix happens to return differently on some other setup is
+    a display quirk, not a reason to crash the whole run."""
+    if not value:
+        return value
+    for fmt in ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return value
+
+
 def haversine_km(p1, p2):
     R = 6371.0
     lat1, lng1 = map(math.radians, p1)
@@ -340,7 +365,7 @@ def write_dispatch_xlsx(out_xlsx, header, rows):
 
 
 def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, template_path, out_xlsx=None,
-          load_mode="pallet", overhang_w=50.0, overhang_l=300.0):
+          load_mode="pallet", overhang_w=50.0, overhang_l=300.0, plant_code="T2"):
     with open(csv_path, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
@@ -809,79 +834,51 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         write_dispatch_xlsx(out_xlsx, sheet_header, sheet_rows)
         print("Dispatch sheet (Excel) written:", out_xlsx)
 
-    # --- compact embeddable JSON for the HTML report (3D view + route map + dispatch table) ---
-    customers = sorted({(s["cust_code"], s["cust_name"]) for s in stacks})
-    cust_index = {c[0]: i for i, c in enumerate(customers)}
-    cust_labels = [f"{c[0]} {c[1]}" for c in customers]
-
-    compact_trucks = []
-    for t in truck_out:
-        agg = {}
-        citems = []
-        for it in t["items"]:
-            citems.append({
-                "x": round(it["x"], 1), "y": round(it["y"], 1),
-                "dx": round(it["dx"], 1), "dy": round(it["dy"], 1),
-                "h": round(it["height"], 1), "y0": round(it.get("y0", 0.0), 1),
-                "c": cust_index[it["cust_code"]],
-                "o": it["order_no"], "it": it["item_code"], "b": int(it["boxes"]),
-            })
-            key = (it["cust_code"], it["cust_name"], it["order_no"], it["item_code"], it["box_w"], it["box_l"], it["t"])
-            agg.setdefault(key, {"boxes": 0, "stacks": 0})
-            agg[key]["boxes"] += it["boxes"]
-            agg[key]["stacks"] += 1
-        rows_agg = [
-            {"cust_code": k[0], "cust_name": k[1], "order_no": k[2], "item": k[3], "w": k[4], "l": k[5], "t": k[6],
-             "boxes": int(v["boxes"]), "stacks": v["stacks"]}
-            for k, v in sorted(agg.items(), key=lambda kv: route_order[kv[0][0]])
-        ]
-
-        truck_custs = sorted({it["cust_code"] for it in t["items"] if it["cust_code"] in cust_points}, key=lambda c: route_order[c])
-        truck_custs = two_opt_improve(truck_custs, road_km)
-        stop_points = [
-            {"code": c, "name": cust_name_by_code[c], "lat": cust_points[c][0], "lng": cust_points[c][1]}
-            for c in truck_custs
-        ]
-        dist_km = sum(
-            road_km(stop_points[i]["code"], stop_points[i + 1]["code"])
-            for i in range(len(stop_points) - 1)
-        )
-
-        compact_trucks.append({
-            "n": t["truck_no"], "util": t["load_pct"], "stacks": t["num_stacks"],
-            "primaryCust": f"{t['primary_cust_code']} {t['primary_cust_name']}" + ("" if t["num_customers"] == 1 else f" 等{t['num_customers']}家"),
-            "items": citems, "rows": rows_agg,
-            "stops": stop_points, "distanceKm": round(dist_km, 1),
+    # --- HTML report: raw order lines + the SAME client-side packing engine the demo Artifact
+    # uses, not a pre-packed snapshot. The report used to embed compact_trucks/embed (this
+    # module's OWN pack -- try_place, a simple flat shelf packer with no skyline, no multi-
+    # strategy, no interactive re-pack) as a static result; the interactive report now computes
+    # its own plan in the browser instead (auto-mode AND 模擬裝車 simulation), so what the user
+    # actually sees/interacts with is the more capable engine, matching the demo exactly. The
+    # CSV/XLSX above are unaffected -- they're still this module's own try_place-based pack,
+    # generated independently, so a truck grouping shown in the interactive HTML may not be
+    # byte-identical to the CSV row grouping even though both are individually valid.
+    raw_lines = []
+    for r in rows:
+        qty = _safe_float(r["qty_box"])
+        w = _safe_float(r["width_mm"]); l = _safe_float(r["length_mm"]); t = _safe_float(r["thickness_mm"])
+        if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
+            continue
+        order_date_iso = _to_iso_date(r["order_date"])
+        lat = (r.get("ship_lat") or "").strip()
+        lng = (r.get("ship_lng") or "").strip()
+        raw_lines.append({
+            "o": r["order_no"], "od": order_date_iso, "dd": None,
+            "cc": r["ship_cust_code"].strip(), "cn": r["ship_cust_name"].strip(),
+            "lat": float(lat) if lat else None, "lng": float(lng) if lng else None,
+            "rt": (r.get("route") or "").strip() or None, "mr": (r.get("main_road") or "").strip() or None,
+            "ic": r["item_code"], "q": qty, "w": w, "l": l, "t": t,
+            "fl": "", "uc": None,
         })
 
-    all_cust_points = [
-        {"code": c, "name": cust_name_by_code[c], "lat": lat, "lng": lng}
-        for c, (lat, lng) in cust_points.items()
-    ]
-
-    embed = {
-        "truckDims": {"L": truck_l, "W": truck_w, "H": truck_h},
-        "customers": cust_labels,
-        "allCustPoints": all_cust_points,
-        "trucks": compact_trucks,
-        "meta": {
-            "date": date_label,
-            "totalOrders": len({s["order_no"] for s in stacks}),
-            "totalLines": len(rows),
-            "totalBoxes": int(sum(s["boxes"] for s in stacks)),
-            "totalTrucks": len(compact_trucks),
-            "totalCustomers": len(customers),
-            "custWithGeo": len(cust_points),
-            "totalDistanceKm": round(sum(t["distanceKm"] for t in compact_trucks), 1),
-        },
+    raw_lines_by_plant = {plant_code: {"label": PLANT_NAMES.get(plant_code, plant_code), "lines": raw_lines}}
+    report_defaults = {
+        "truckL": truck_l, "truckW": truck_w, "truckH": truck_h,
+        "loadMode": load_mode, "plantCode": plant_code, "dateLabel": date_label,
     }
 
     with open(template_path, encoding="utf-8") as f:
         tpl = f.read()
-    data_json = json.dumps(embed, ensure_ascii=False, separators=(",", ":"))
-    html = tpl.replace("/*__EMBED_DATA__*/{}/*__END_EMBED_DATA__*/", data_json)
-    html = html.replace("<title>2026-07-01 排車與3D裝載模擬 — 龍潭廠</title>",
-                         f"<title>{date_label} 排車與3D裝載模擬 — 龍潭廠</title>")
+    html = tpl.replace(
+        "/*__RAW_LINES__*/{}/*__END_RAW_LINES__*/",
+        json.dumps(raw_lines_by_plant, ensure_ascii=False, separators=(",", ":")),
+    )
+    html = html.replace(
+        '/*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/',
+        json.dumps(report_defaults, ensure_ascii=False, separators=(",", ":")),
+    )
+    html = html.replace("<title>排車單與3D裝載模擬</title>",
+                         f"<title>{date_label} 排車與3D裝載模擬 — {PLANT_NAMES.get(plant_code, plant_code)}</title>")
 
     os.makedirs(os.path.dirname(out_html) or ".", exist_ok=True)
     with open(out_html, "w", encoding="utf-8") as f:
@@ -905,10 +902,14 @@ def main():
                           "no pallet, same-customer orders can stack on top of each other up to 2200mm")
     ap.add_argument("--overhang-w", type=float, default=50.0, help="pallet mode: box overhang allowed past the pallet edge, width axis, mm")
     ap.add_argument("--overhang-l", type=float, default=300.0, help="pallet mode: box overhang allowed past the pallet edge, length axis, mm")
+    ap.add_argument("--plant", choices=list(PLANT_NAMES), default="T2",
+                     help="plant code (matches config.json's db.database) -- selects the depot "
+                          "location the HTML report's client-side route engine measures distance "
+                          "from, and which of its four built-in plants the embedded data belongs to")
     args = ap.parse_args()
 
     build(args.csv, args.date, args.truck_l, args.truck_w, args.truck_h, args.out_html, args.out_csv, args.template, args.out_xlsx,
-          load_mode=args.load_mode, overhang_w=args.overhang_w, overhang_l=args.overhang_l)
+          load_mode=args.load_mode, overhang_w=args.overhang_w, overhang_l=args.overhang_l, plant_code=args.plant)
 
 
 if __name__ == "__main__":

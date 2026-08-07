@@ -54,7 +54,8 @@ python (Join-Path $root "lib\build_dispatch.py") `
     --template (Join-Path $root "lib\template.html") `
     --out-html $reportHtml --out-csv $dispatchCsv --out-xlsx $dispatchXlsx `
     --truck-l $TruckL --truck-w $TruckW --truck-h $TruckH `
-    --load-mode $LoadMode --overhang-w $OverhangW --overhang-l $OverhangL
+    --load-mode $LoadMode --overhang-w $OverhangW --overhang-l $OverhangL `
+    --plant $config.db.database
 if ($LASTEXITCODE -ne 0) { throw "build_dispatch.py failed (exit $LASTEXITCODE)" }
 
 Write-Host ""

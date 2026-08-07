@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>2026-07-01 排車與3D裝載模擬 — 龍潭廠</title>
+<title>排車單與3D裝載模擬</title>
 <style>
   :root {
     --bg: #f1eee7;
@@ -80,6 +80,51 @@
     font-size: 12.5px;
     letter-spacing: 0.02em;
   }
+  .date-range {
+    margin-top: 9px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .date-range label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted); letter-spacing: 0.02em;
+  }
+  .date-range input[type="date"], .date-range input[type="number"], .date-range select {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--ink); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 7px;
+  }
+  .date-range input[type="number"] { width: 62px; }
+  .date-range select { font-weight: 600; color: var(--accent); }
+  .date-range span { color: var(--muted); font-size: 12px; }
+  .date-range button {
+    font-family: var(--font-body); font-size: 12px; color: var(--accent);
+    background: var(--accent-soft); border: 1px solid var(--line); border-radius: 100px;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .date-range button:hover { filter: brightness(0.96); }
+  .range-note { color: var(--warn) !important; }
+  .mode-toggle {
+    display: inline-flex; border: 1px solid var(--line); border-radius: 100px; overflow: hidden;
+  }
+  .mode-toggle button {
+    font-family: var(--font-body); font-size: 12px; color: var(--muted);
+    background: var(--surface-2); border: none; border-radius: 0;
+    padding: 5px 13px; cursor: pointer;
+  }
+  .mode-toggle button.active { background: var(--accent); color: var(--surface); font-weight: 600; }
+  .mode-toggle button:not(.active):hover { filter: brightness(0.95); }
+  .slider-label.disabled { opacity: 0.4; pointer-events: none; }
+  .slider-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted); letter-spacing: 0.02em;
+  }
+  .slider-label input[type="range"] {
+    width: 140px; accent-color: var(--accent-2);
+  }
+  .slider-val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 12px; color: var(--accent-2); min-width: 42px;
+  }
   .stat-row { display: flex; gap: 22px; flex-wrap: wrap; }
   .stat {
     display: flex; flex-direction: column; gap: 2px; min-width: 74px;
@@ -94,21 +139,6 @@
   .stat .lbl {
     font-size: 11px; color: var(--muted); letter-spacing: 0.04em;
   }
-
-  .export-btn {
-    align-self: center;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--surface);
-    font-family: var(--font-body);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .export-btn:hover { opacity: 0.88; }
 
   .body-grid {
     display: grid;
@@ -200,6 +230,15 @@
   canvas#sim, canvas#mapCanvas {
     display: block; width: 100%; height: 400px; border-radius: 4px;
   }
+  canvas#mapCanvas { cursor: grab; touch-action: none; }
+  canvas#mapCanvas:active { cursor: grabbing; }
+  .map-zoom-controls { display: inline-flex; gap: 4px; }
+  .map-zoom-controls button {
+    width: 22px; height: 22px; line-height: 1; border-radius: 4px;
+    border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .map-zoom-controls button:hover { filter: brightness(0.95); }
 
   .dual-panel {
     display: grid;
@@ -267,6 +306,11 @@
   table.dispatch td.num, table.dispatch th.num {
     font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right;
   }
+  table.dispatch tfoot td {
+    border-top: 1.5px solid var(--ink); border-bottom: none;
+    font-weight: 700; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    color: var(--accent-2);
+  }
   .table-scroll { overflow-x: auto; }
 
   .tooltip {
@@ -282,6 +326,45 @@
 
   .empty-note { color: var(--muted); font-size: 12.5px; padding: 20px 0; }
 
+  .sim-overflow {
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    border: 1px solid var(--critical);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--critical) 10%, var(--surface));
+    color: var(--ink);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .sim-overflow strong { color: var(--critical); }
+  .sim-overflow ul { margin: 6px 0 0; padding-left: 18px; }
+
+  .sim-summary { padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .sim-search { padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  .sim-search input {
+    width: 100%; box-sizing: border-box; font-family: var(--font-body); font-size: 12.5px;
+    color: var(--ink); background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 4px; padding: 5px 9px;
+  }
+  .sim-search input:focus { outline: 1.5px solid var(--accent); outline-offset: -1px; }
+  .sim-actions { padding: 8px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+  .sim-actions button {
+    font-family: var(--font-body); font-size: 12.5px; border-radius: 100px; cursor: pointer;
+    padding: 6px 0; border: 1px solid var(--line);
+  }
+  .sim-actions button.primary { flex: 1; background: var(--accent); color: var(--surface); border: none; font-weight: 600; }
+  .sim-actions button.secondary { padding: 6px 14px; background: var(--surface-2); color: var(--muted); }
+  .sim-cust {
+    display: flex; align-items: center; gap: 6px; padding: 8px 16px;
+    cursor: pointer; font-size: 12.5px; font-weight: 600; border-top: 1px solid var(--line);
+  }
+  .sim-cust span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sim-order {
+    display: flex; align-items: center; gap: 6px; padding: 3px 16px 3px 34px;
+    cursor: pointer; font-size: 11.5px; color: var(--muted);
+  }
+  .sim-order span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
 
@@ -296,10 +379,60 @@
   <header class="topbar">
     <div class="title-block">
       <h1>排車單 &amp; 3D裝載模擬</h1>
-      <div class="sub">龍潭廠出貨排車 · 資料日期 <span id="metaDate">—</span> · 車廂內徑 <span id="metaTruck">—</span></div>
+      <div class="sub"><span id="metaPlant">—</span>出貨排車 · 資料日期 <span id="metaDate">—</span></div>
+      <div class="date-range">
+        <label>廠區
+          <select id="plantSelect"></select>
+        </label>
+        <label>車廂內徑(mm)
+          <input type="number" id="truckLInput" min="1000" step="100" value="8700" title="長 L">
+          ×
+          <input type="number" id="truckWInput" min="500" step="100" value="2400" title="寬 W">
+          ×
+          <input type="number" id="truckHInput" min="500" step="100" value="2400" title="高 H">
+        </label>
+        <label>訂單日期
+          <input type="date" id="rangeStart">
+          <span>至</span>
+          <input type="date" id="rangeEnd">
+        </label>
+        <label>訂單交期
+          <input type="date" id="deliveryFilter">
+          <button type="button" id="deliveryClear" title="清除交期篩選,顯示區間內所有交期">清除</button>
+        </label>
+        <button type="button" id="rangeReset">重設為預設(訂單日期:一個月前–一星期後 · 交期:明天)</button>
+        <span class="range-note" id="rangeNote"></span>
+      </div>
+      <div class="date-range">
+        <div class="mode-toggle" id="viewModeToggle" role="radiogroup" aria-label="檢視模式">
+          <button type="button" data-mode="auto" class="active">自動排車</button>
+          <button type="button" data-mode="sim">模擬裝車</button>
+        </div>
+        <div class="mode-toggle" id="loadModeToggle" role="radiogroup" aria-label="裝車方式">
+          <button type="button" data-mode="pallet" class="active">棧板疊車</button>
+          <button type="button" data-mode="manual">手工疊車</button>
+        </div>
+        <label class="slider-label" id="overhangWLabel">棧板容許延伸寬度
+          <input type="range" id="overhangW" min="0" max="100" step="10" value="50">
+          <span class="slider-val" id="overhangWVal">50mm</span>
+        </label>
+        <label class="slider-label" id="overhangLLabel">棧板容許延伸長度
+          <input type="range" id="overhangL" min="0" max="500" step="10" value="300">
+          <span class="slider-val" id="overhangLVal">300mm</span>
+        </label>
+        <label class="slider-label" id="maxCustPerTruckLabel">車次最大客戶數
+          <input type="range" id="maxCustPerTruck" min="1" max="8" step="1" value="3">
+          <span class="slider-val" id="maxCustPerTruckVal">3</span>
+        </label>
+        <label class="slider-label" id="dirExemptKmLabel">方向限制豁免距離(離廠區內不限方向)
+          <input type="range" id="dirExemptKm" min="0" max="50" step="1" value="15">
+          <span class="slider-val" id="dirExemptKmVal">15km</span>
+        </label>
+        <button type="button" id="exportExcelBtn">匯出Excel(全部車次)</button>
+        <button type="button" id="downloadToolBtn" title="將本工具目前畫面存成一個獨立HTML檔,離線也能開啟使用">下載工具(HTML)</button>
+      </div>
     </div>
     <div class="stat-row" id="statRow"></div>
-    <button type="button" id="exportExcelBtn" class="export-btn">匯出Excel</button>
   </header>
 
   <div class="body-grid">
@@ -313,19 +446,31 @@
           <h2 id="truckTitle">車次 1</h2>
           <div class="sub" id="truckCust" style="color:var(--muted);font-size:12.5px;margin-top:2px;"></div>
         </div>
-        <span class="util-pill" id="utilPill">裝載率 —</span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="util-pill" id="caiPill">材數 —</span>
+          <span class="util-pill" id="utilPill">裝載率 —</span>
+        </div>
       </div>
+
+      <div class="sim-overflow" id="simOverflow" style="display:none;"></div>
 
       <div class="dual-panel">
         <div>
-          <div class="panel-label">3D裝載模擬</div>
+          <div class="panel-label">3D裝載模擬(可滾輪縮放、拖曳旋轉)</div>
           <div class="canvas-wrap">
             <canvas id="sim"></canvas>
           </div>
           <div class="legend" id="legend"></div>
         </div>
         <div>
-          <div class="panel-label">送貨客戶地理位置</div>
+          <div class="panel-label" style="display:flex;justify-content:space-between;align-items:center;">
+            <span>送貨客戶地理位置(可滾輪縮放、拖曳移動)</span>
+            <span class="map-zoom-controls">
+              <button type="button" id="mapZoomOut" title="縮小">&minus;</button>
+              <button type="button" id="mapZoomReset" title="重置視圖">⤢</button>
+              <button type="button" id="mapZoomIn" title="放大">+</button>
+            </span>
+          </div>
           <div class="canvas-wrap">
             <canvas id="mapCanvas"></canvas>
           </div>
@@ -338,11 +483,16 @@
           <caption>排車單明細</caption>
           <thead>
             <tr>
-              <th>送貨客戶</th><th>訂單號</th><th>品號</th>
-              <th class="num">箱數</th><th class="num">寬mm</th><th class="num">長mm</th><th class="num">厚mm</th><th class="num">堆疊數</th>
+              <th class="num">疊車順序</th>
+              <th>送貨客戶</th><th>訂單號</th><th>品號</th><th>楞別</th><th>單位</th>
+              <th class="num">箱數</th><th class="num">箱寬mm</th><th class="num">箱長mm</th><th class="num">厚mm</th>
+              <th>單位尺寸mm</th><th class="num">堆數</th>
+              <th class="num">堆疊高度mm</th><th class="num">單位總高mm</th>
+              <th class="num">材數/箱</th><th class="num">材數合計</th>
             </tr>
           </thead>
           <tbody id="dispatchBody"></tbody>
+          <tfoot id="dispatchFoot"></tfoot>
         </table>
       </div>
     </main>
@@ -352,9 +502,1679 @@
 <div class="tooltip" id="tooltip"></div>
 
 <script>
-const DATA = /*__EMBED_DATA__*/{}/*__END_EMBED_DATA__*/;
+const RAW_LINES_BY_PLANT = /*__RAW_LINES__*/{}/*__END_RAW_LINES__*/;
+const REPORT_DEFAULTS = /*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/;
+const PLANT_ORDER = ["T2", "T10", "T3", "T6"];
+let CURRENT_PLANT = REPORT_DEFAULTS.plantCode;
+function currentLines() { return RAW_LINES_BY_PLANT[CURRENT_PLANT]?.lines || []; }
+function currentPlantLabel() { return RAW_LINES_BY_PLANT[CURRENT_PLANT]?.label || CURRENT_PLANT; }
 
+// plant depot locations (geocoded from the factory street addresses); every truck departs from here.
+const PLANT_INFO = {
+  T2:  { name: "龍潭廠", addr: "桃園市龍潭區烏林里工二路280號",     lat: 24.8858522, lng: 121.2081546 },
+  T10: { name: "雲林廠", addr: "雲林縣斗六市十三里十三北路25號",   lat: 23.7511800, lng: 120.5697657 },
+  T3:  { name: "神岡廠", addr: "臺中市神岡區新庄里溪頭路78號",     lat: 24.2871740, lng: 120.6496444 },
+  T6:  { name: "路竹廠", addr: "高雄市路竹區北嶺里中山南路100-1號", lat: 22.8310267, lng: 120.2657714 },
+};
+function currentPlantPoint() { return PLANT_INFO[CURRENT_PLANT]; }
+
+// precomputed real driving-distance matrix (km) for the current plant, plus the pseudo-code
+// "PLANT" for the depot itself -- built offline via OSRM at data-build time, since a
+// published artifact's CSP blocks live calls to routing APIs from the browser. Stored
+// compactly as a shared code list + flat NxN km array (rather than a {code:{code:km}}
+// object, which repeats every code string as a JSON key and made the artifact multiple MB).
+// Falls back to straight-line distance for any pair not covered.
+let _distIndexCache = null, _distIndexPlant = null;
+function distIndex() {
+  const m = RAW_LINES_BY_PLANT[CURRENT_PLANT]?.dist;
+  if (!m) return null;
+  if (_distIndexPlant !== CURRENT_PLANT) {
+    const idx = {};
+    m.codes.forEach((c, i) => idx[c] = i);
+    _distIndexCache = idx;
+    _distIndexPlant = CURRENT_PLANT;
+  }
+  return { idx: _distIndexCache, km: m.km };
+}
+function roadKm(codeA, ptA, codeB, ptB) {
+  const d = distIndex();
+  if (d) {
+    const i = d.idx[codeA], j = d.idx[codeB];
+    if (i != null && j != null) {
+      const v = d.km[i][j];
+      if (v != null) return v;
+    }
+  }
+  return haversineKm(ptA, ptB);
+}
+
+// improves a nearest-neighbour route with 2-opt local search (reverse the segment between
+// every pair of positions, keep it if shorter) until no single reversal helps any more.
+// Nearest-neighbour alone routinely leaves one long doubling-back leg near the end of the
+// route because it never looks further than the very next stop; with only a handful of
+// stops per truck, exhaustive 2-opt converges in a few passes and reliably removes that.
+function twoOptImprove(stops, startCode, startPt) {
+  if (stops.length < 3) return stops;
+  function routeDist(order) {
+    let d = roadKm(startCode, startPt, order[0].code, [order[0].lat, order[0].lng]);
+    for (let i = 0; i < order.length - 1; i++) {
+      d += roadKm(order[i].code, [order[i].lat, order[i].lng], order[i + 1].code, [order[i + 1].lat, order[i + 1].lng]);
+    }
+    return d;
+  }
+  let best = stops;
+  let bestDist = routeDist(best);
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < best.length - 1; i++) {
+      for (let j = i + 1; j < best.length; j++) {
+        const cand = best.slice(0, i).concat(best.slice(i, j + 1).reverse(), best.slice(j + 1));
+        const candDist = routeDist(cand);
+        if (candDist < bestDist - 1e-9) {
+          best = cand; bestDist = candDist; improved = true;
+        }
+      }
+    }
+  }
+  return best;
+}
+const MAP_BG_SRC = /*__MAP_BG__*/""/*__END_MAP_BG__*/;
+const MAP_IMG_BOUNDS = { west: 119.53125, east: 122.34375, north: 25.79989118208833, south: 21.943045533438177 };
+const MAP_IMG_W = 512;
+const MAP_IMG_H = 768;
+const MAP_ATTRIBUTION = "© OpenStreetMap contributors";
+let mapImg = null;
+if (MAP_BG_SRC) {
+  mapImg = new Image();
+  mapImg.onload = () => { if (DATA) render(); };
+  mapImg.src = MAP_BG_SRC;
+}
+
+// ---- packing pipeline (ported from the server-side Python prep script) ----
+let TRUCK_L = REPORT_DEFAULTS.truckL, TRUCK_W = REPORT_DEFAULTS.truckW, TRUCK_H = REPORT_DEFAULTS.truckH;
+const PALLET_OPTIONS = [[1100.0, 1100.0], [1100.0, 1300.0]];
+const PALLET_BASE_HEIGHT = 150.0;
+const PALLET_MAX_TOTAL_HEIGHT = 2200.0;
+const PALLET_MAX_CARGO_HEIGHT = PALLET_MAX_TOTAL_HEIGHT - PALLET_BASE_HEIGHT;
+// 1材 = 1000mm x 1000mm x 7mm reference volume; a box's 材數 scales with its own thickness.
+const CAI_REF_HEIGHT_MM = 7.0;
+
+// user-adjustable: how far a box may overhang the pallet's edge (mm), per axis.
+// Widens the effective footprint used for pallet-fit and column-count decisions.
+let PALLET_OVERHANG_W = 50.0;
+let PALLET_OVERHANG_L = 300.0;
+
+// user-adjustable: max distinct delivery customers allowed on one truck.
+let MAX_CUSTOMERS_PER_TRUCK = 3;
+
+// user-adjustable: customers within this road distance of the plant are exempt from the
+// truck direction-compatibility rule (a truck can't normally mix a customer north of the
+// plant with one south of it, or east with west) -- when a customer is this close, being on
+// the "wrong side" barely changes the route, so it isn't worth the packing cost of enforcing
+// it. See custDirection().
+let DIRECTION_EXEMPT_RADIUS_KM = 15.0;
+
+// loading method: 'pallet' = forklift-loaded on standard pallets (150mm base reserved,
+// footprint snapped to a pallet SKU, overhang allowance applies); 'manual' = hand-stacked
+// straight onto the truck bed — no pallet base, no SKU snapping, full 2200mm goes to cargo,
+// and the footprint used on the truck floor is just the box's own width x length.
+let LOAD_MODE = REPORT_DEFAULTS.loadMode;
+const MANUAL_MAX_TOTAL_HEIGHT = 2200.0;
+
+const round1 = x => Math.round(x * 10) / 10;
+const round2 = x => Math.round(x * 100) / 100;
+const round3 = x => Math.round(x * 1000) / 1000;
+
+function caiPerBox(w, l, t) {
+  return (w / 1000) * (l / 1000) * (t / CAI_REF_HEIGHT_MM);
+}
+function choosePallet(w, l, overhangW, overhangL) {
+  for (const [pw, pl] of PALLET_OPTIONS) {
+    const effPw = pw + overhangW, effPl = pl + overhangL;
+    if ((w <= effPw && l <= effPl) || (w <= effPl && l <= effPw)) return [pw, pl];
+  }
+  return null;
+}
+function columnsPerPallet(bw, bl, effPw, effPl) {
+  const opt1 = Math.floor(effPw / bw) * Math.floor(effPl / bl);
+  const opt2 = Math.floor(effPw / bl) * Math.floor(effPl / bw);
+  return Math.max(1, opt1, opt2);
+}
+function haversineKm(p1, p2) {
+  const R = 6371.0;
+  const lat1 = p1[0] * Math.PI / 180, lng1 = p1[1] * Math.PI / 180;
+  const lat2 = p2[0] * Math.PI / 180, lng2 = p2[1] * Math.PI / 180;
+  const dlat = lat2 - lat1, dlng = lng2 - lng1;
+  const a = Math.sin(dlat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// identifies which dispatch-sheet row / 3D group a stack belongs to (same customer, order,
+// item, flute and dimensions). Used as a sort tiebreaker so that two DIFFERENT groups which
+// happen to share the same footprint (and, in computePlan, the same delivery rank) don't tie
+// in the packing-order sort and end up interleaved -- forcing every group's own stacks to
+// sort as one contiguous block regardless of what order they originally appear in.
+function stackGroupKey(s) {
+  return [s.custCode, s.custName, s.orderNo, s.itemCode, s.fluteType, s.boxW, s.boxL, s.t, s.nomW, s.nomL].join('||');
+}
+
+// 手工疊車 only: 同客戶相鄰裝車序號可以疊在另一筆訂單的上方,只要不超過 MANUAL_MAX_TOTAL_HEIGHT。
+// Fills height budget across ORDERS at the box-quantity level, not as an all-or-nothing merge
+// of whole pre-sized stacks: a customer's later, smaller-footprint order first contributes as
+// many of its OWN boxes as fit into whatever headroom existing columns have left (riding on
+// top of them), and only whatever quantity doesn't fit that way starts fresh column(s) of its
+// own at the full height budget. E.g. order A fills a column to 1600/2200mm; order B (smaller
+// footprint, larger quantity) puts as many boxes as fit in the remaining 600mm on top of A,
+// and the rest of B's boxes become their own separate column -- so one order can end up split
+// across a shared column AND a dedicated one.
+//
+// Different customers never share a column (nobody wants a stranger's freight resting on
+// theirs, and it breaks sequential unloading). A column's footprint is fixed by whatever order
+// started it; a rider just needs to fit within that footprint, checked via sorted dimension
+// pairs so it doesn't matter which physical orientation the packer later places the base in.
+//
+// Runs as a pre-placement pass (grouped by customer, decided before any truck is chosen) --
+// a column base's own "height" grows to the full column height (so the existing floor-fit and
+// volume math in findSkylineFit/applySkylineFit needs no changes at all); its true own height
+// is stashed in "_ownHeight" and each rider is stashed in "_children" (with its own y0 offset)
+// so expandItemsWithChildren can split them back into separate report rows/3D items later.
+//
+// `orderLines` are UNCHUNKED: one entry per order line -- chunking into height-capped stacks
+// happens here, per column, instead of upfront in buildStacks, since how much of an order's
+// quantity ends up on an existing column vs. a fresh one isn't known until this pass runs.
+//
+// `mode` selects the stacking strategy: 'greedy' (default) is the ordinary same-customer
+// on-top-stacking behaviour described above. 'none' skips riding entirely -- every line becomes
+// its own independent column -- used by repackTruck to generate an alternate candidate for its
+// joint stacking/floor-placement comparison (see repackTruck): a customer whose orders happen to
+// tile the floor well side by side can come out ahead with NO height-stacking at all, which the
+// greedy mode has no way to discover since it commits to stacking before floor placement ever
+// runs.
+function packManualColumns(orderLines, maxTotalHeight, mode) {
+  mode = mode || 'greedy';
+  const byCust = new Map();
+  for (const ol of orderLines) {
+    if (!byCust.has(ol.custCode)) byCust.set(ol.custCode, []);
+    byCust.get(ol.custCode).push(ol);
+  }
+  const stacks = [];
+  for (const custLines of byCust.values()) {
+    // largest footprint first -- a rider can only go on top of something whose footprint it
+    // fits WITHIN, so the biggest orders have to become column bases before anything smaller
+    // is considered for them.
+    custLines.sort((a, b) => (b.boxW * b.boxL) - (a.boxW * a.boxL));
+    const columns = []; // each: { w, l, usedHeight, base: stack }
+    for (const ol of custLines) {
+      const t = ol.t;
+      let remaining = ol.qty;
+      const lo = Math.min(ol.boxW, ol.boxL), hi = Math.max(ol.boxW, ol.boxL);
+
+      // Ride onto AT MOST ONE existing column, never several: the dispatch sheet shows one
+      // loading-sequence number per order (taken from wherever it's first placed), so an order
+      // riding on top of two DIFFERENT bases would have two physical dependencies that no
+      // single number can represent consistently -- whichever base ends up placed later would
+      // make that number a lie about when the order's cargo actually becomes loadable. Capping
+      // to one donor column keeps every order's position tied to exactly one earlier stack.
+      if (mode === 'greedy') for (const col of columns) {
+        const bLo = Math.min(col.w, col.l), bHi = Math.max(col.w, col.l);
+        if (!(lo <= bLo && hi <= bHi)) continue;
+        const n = Math.min(remaining, Math.floor((maxTotalHeight - col.usedHeight) / t));
+        if (n <= 0) continue;
+        const child = {
+          orderNo: ol.orderNo, custCode: ol.custCode, custName: ol.custName, lat: ol.lat, lng: ol.lng,
+          route: ol.route, mainRoad: ol.mainRoad, itemCode: ol.itemCode, fluteType: ol.fluteType,
+          deliveryDate: ol.deliveryDate, boxes: n, t, boxW: ol.boxW, boxL: ol.boxL,
+          nomW: ol.boxW, nomL: ol.boxL, height: n * t, cargoHeight: n * t, baseHeight: 0,
+          caiPerBox: ol.caiPerBox, unitCode: ol.unitCode, y0: col.usedHeight,
+        };
+        (col.base._children || (col.base._children = [])).push(child);
+        col.base.height += n * t;
+        col.usedHeight += n * t;
+        remaining -= n;
+        break;
+      }
+
+      const boxesPerStack = Math.max(1, Math.floor(maxTotalHeight / t));
+      while (remaining > 0) {
+        const n = Math.min(boxesPerStack, remaining);
+        const stack = {
+          orderNo: ol.orderNo, custCode: ol.custCode, custName: ol.custName, lat: ol.lat, lng: ol.lng,
+          route: ol.route, mainRoad: ol.mainRoad, itemCode: ol.itemCode, fluteType: ol.fluteType,
+          deliveryDate: ol.deliveryDate, boxes: n, t, boxW: ol.boxW, boxL: ol.boxL,
+          w: ol.boxW, l: ol.boxL, nomW: ol.boxW, nomL: ol.boxL, cols: 1,
+          height: n * t, cargoHeight: n * t, baseHeight: 0,
+          caiPerBox: ol.caiPerBox, unitCode: ol.unitCode, y0: 0, _ownHeight: n * t,
+        };
+        columns.push({ w: ol.boxW, l: ol.boxL, usedHeight: n * t, base: stack });
+        stacks.push(stack);
+        remaining -= n;
+      }
+    }
+  }
+  return stacks;
+}
+
+// Inverse of packManualColumns: reconstructs UNCHUNKED order-lines (one per distinct order+item+
+// dims, qty = every chunk's boxes summed back together) from a batch of ALREADY-merged stacks --
+// whatever base+rider structure a previous packManualColumns run gave them is discarded, not
+// read. Used by repackTruck to re-derive a customer's true order quantities so an ALTERNATE
+// stacking strategy can be tried against the exact same cargo, instead of being stuck with
+// whichever stacking decision the very first (global) pass already committed to.
+function unmergeToOrderLines(stacks) {
+  const agg = new Map();
+  function addChunk(s) {
+    const key = [s.custCode, s.orderNo, s.itemCode, s.fluteType, s.boxW, s.boxL, s.t].join('||');
+    if (!agg.has(key)) {
+      agg.set(key, {
+        orderNo: s.orderNo, custCode: s.custCode, custName: s.custName, lat: s.lat, lng: s.lng,
+        route: s.route, mainRoad: s.mainRoad, itemCode: s.itemCode, fluteType: s.fluteType,
+        deliveryDate: s.deliveryDate, boxW: s.boxW, boxL: s.boxL, t: s.t,
+        caiPerBox: s.caiPerBox, unitCode: s.unitCode, qty: 0,
+      });
+    }
+    agg.get(key).qty += s.boxes;
+  }
+  for (const s of stacks) {
+    addChunk(s);
+    for (const c of (s._children || [])) addChunk(c);
+  }
+  return [...agg.values()];
+}
+
+// scores a repackTruckOnce result for repackTruck's candidate comparison: fewer physical trucks
+// wins outright (that's the metric that actually costs money); among equal truck counts, less
+// total floor length used (summed across those physical trucks) wins, matching the same
+// tightness metric placeGroupsBestFit already optimizes for within a single truck.
+function packingScore(subTruckItemsList) {
+  let usedLength = 0;
+  for (const items of subTruckItemsList) {
+    usedLength += items.reduce((m, it) => Math.max(m, it.x + it.dx), 0);
+  }
+  return { truckCount: subTruckItemsList.length, usedLength };
+}
+function scoreIsBetter(a, b) {
+  if (a.truckCount !== b.truckCount) return a.truckCount < b.truckCount;
+  return a.usedLength < b.usedLength;
+}
+
+// Unpacks each merged manual-mode column (see packManualColumns) back into one report row/3D
+// item per physical order: the base keeps its own true height, and each rider becomes its own
+// entry inheriting the base's floor position (x/y/dx/dy) -- they occupy the same footprint
+// slot, just a different height band (y0..y0+height). No-op for stacks that were never merged
+// (pallet mode, or a manual stack that never got a rider).
+function expandItemsWithChildren(items) {
+  const expanded = [];
+  for (const it of items) {
+    const children = it._children;
+    if (!children || !children.length) {
+      expanded.push({ ...it, y0: it.y0 || 0 });
+      continue;
+    }
+    const { _children, _ownHeight, ...base } = it;
+    expanded.push({ ...base, height: _ownHeight != null ? _ownHeight : it.height, y0: it.y0 || 0 });
+    for (const child of children) {
+      expanded.push({ ...child, x: it.x, y: it.y, dx: it.dx, dy: it.dy });
+    }
+  }
+  return expanded;
+}
+
+function buildStacks(lines) {
+  const overhangW = PALLET_OVERHANG_W, overhangL = PALLET_OVERHANG_L;
+  const manual = LOAD_MODE === 'manual';
+  const stacks = [];
+  // manual mode's flat (non-vertical) items are deferred to packManualColumns below instead of
+  // being chunked into stacks right here -- how much of an order's quantity ends up riding on
+  // an existing column vs. starting a fresh one isn't known until that pass runs, since it
+  // depends on what headroom OTHER same-customer orders happen to leave behind. Vertical
+  // (oversized-cross-section) stacks don't participate: their "boxesPerUnit" already means
+  // something different (how many panels fit side by side along TRUCK_W, not a height budget
+  // each panel accumulates into), so folding them into the same column-filling logic would mix
+  // two incompatible chunking rules -- rare enough that keeping them as their own independent
+  // stacks, same as pallet mode, is the pragmatic choice.
+  const manualFlatLines = [];
+  const skippedOversized = [];
+  for (const r of lines) {
+    const qty = r.q, w = r.w, l = r.l, t = r.t;
+    if (w <= 0 || l <= 0 || t <= 0 || qty <= 0) continue;
+    const flute = r.fl;
+
+    // Some items (e.g. 平板/紙板 flat paperboard) are wider than the truck in BOTH horizontal
+    // orientations -- pallet/overhang inflation only ever makes the footprint bigger, so if the
+    // raw box itself can't lie flat, nothing downstream can either. Stand it up on edge instead:
+    // multiple panels side by side, each consuming its own thickness along the truck's floor
+    // width, with one edge as height (still bounded by TRUCK_H, same as flat stacking) and the
+    // other as floor depth. boxW/boxL stay the panel's TRUE dimensions (what the dispatch sheet
+    // displays) even though w/l (the packing footprint) become the transformed thickness/depth
+    // pair -- same true-size-vs-packing-footprint split pallet mode already uses for boxW/boxL
+    // vs nomW/nomL. If neither edge fits within TRUCK_H even standing up, it genuinely can't be
+    // loaded in this truck configuration -- skipped (not crashed) and reported at the end.
+    if (w > TRUCK_W && l > TRUCK_W) {
+      const heightCandidates = [w, l].filter(d => d <= TRUCK_H);
+      if (!heightCandidates.length) { skippedOversized.push(r); continue; }
+      const heightDim = Math.max(...heightCandidates);
+      const depthDim = heightDim === w ? l : w;
+      const boxesPerUnit = Math.max(1, Math.floor(TRUCK_W / t));
+      let remaining = qty;
+      while (remaining > 0) {
+        const n = Math.min(boxesPerUnit, remaining);
+        stacks.push({
+          orderNo: r.o, custCode: r.cc, custName: r.cn, lat: r.lat, lng: r.lng,
+          route: r.rt || null, mainRoad: r.mr || null,
+          itemCode: r.ic, fluteType: flute, deliveryDate: r.dd || "(無送貨日)",
+          boxes: n, w: n * t, l: depthDim, nomW: n * t, nomL: depthDim, t,
+          boxW: w, boxL: l, cols: 1,
+          height: heightDim, cargoHeight: heightDim, baseHeight: 0,
+          caiPerBox: caiPerBox(w, l, t),
+          unitCode: r.uc,
+        });
+        remaining -= n;
+      }
+      continue;
+    }
+
+    if (manual) {
+      manualFlatLines.push({
+        orderNo: r.o, custCode: r.cc, custName: r.cn, lat: r.lat, lng: r.lng,
+        route: r.rt || null, mainRoad: r.mr || null,
+        itemCode: r.ic, fluteType: flute, deliveryDate: r.dd || "(無送貨日)",
+        boxW: w, boxL: l, t, qty,
+        caiPerBox: caiPerBox(w, l, t), unitCode: r.uc,
+      });
+      continue;
+    }
+
+    let nomW, nomL, footW, footL, cols;
+    const pallet = choosePallet(w, l, overhangW, overhangL);
+    if (!pallet) { nomW = w; nomL = l; } else { [nomW, nomL] = pallet; }
+    // effective footprint (nominal pallet + allowable overhang) drives fitting,
+    // column count, and the actual floor space reserved on the truck.
+    footW = nomW + overhangW; footL = nomL + overhangL;
+    cols = columnsPerPallet(w, l, footW, footL);
+    const layerCap = Math.max(1, Math.floor(PALLET_MAX_CARGO_HEIGHT / t));
+    const boxesPerUnit = cols * layerCap;
+    let remaining = qty;
+    while (remaining > 0) {
+      const n = Math.min(boxesPerUnit, remaining);
+      const layersUsed = Math.ceil(n / cols);
+      const cargoH = layersUsed * t;
+      stacks.push({
+        orderNo: r.o, custCode: r.cc, custName: r.cn, lat: r.lat, lng: r.lng,
+        route: r.rt || null, mainRoad: r.mr || null,
+        itemCode: r.ic, fluteType: flute, deliveryDate: r.dd || "(無送貨日)",
+        boxes: n, w: footW, l: footL, nomW, nomL, t, boxW: w, boxL: l, cols,
+        height: PALLET_BASE_HEIGHT + cargoH, cargoHeight: cargoH, baseHeight: PALLET_BASE_HEIGHT,
+        caiPerBox: caiPerBox(w, l, t),
+        unitCode: r.uc,
+      });
+      remaining -= n;
+    }
+  }
+  if (manualFlatLines.length) {
+    // The ERP source data can carry the SAME order+item as several separate raw rows (e.g.
+    // different production batches) -- if each one were fed to packManualColumns on its own,
+    // "ride on at most one donor column" only limits a single ROW's contribution, not the
+    // order+item's total: a second row for the same item would go looking for its OWN donor
+    // and could easily land on a DIFFERENT column, right back to one order/item depending on
+    // multiple bases with no single consistent loading-sequence number. Summing same-key rows
+    // into one line first (same fields stackGroupKey groups by, so this can't merge two rows
+    // that would end up as different dispatch-sheet entries anyway) makes "at most one donor"
+    // hold for the item as a whole, not just per raw row.
+    const merged = new Map();
+    for (const ol of manualFlatLines) {
+      const key = [ol.custCode, ol.orderNo, ol.itemCode, ol.fluteType, ol.boxW, ol.boxL, ol.t, ol.deliveryDate].join('||');
+      const existing = merged.get(key);
+      if (existing) { existing.qty += ol.qty; } else { merged.set(key, { ...ol }); }
+    }
+    stacks.push(...packManualColumns([...merged.values()], MANUAL_MAX_TOTAL_HEIGHT));
+  }
+  if (skippedOversized.length) {
+    console.warn(`${skippedOversized.length} order line(s) exceed the truck's cross-section in every orientation (flat or standing) and were excluded from dispatch planning -- these need manual arrangement:`, skippedOversized);
+  }
+  stacks._skippedOversized = skippedOversized;
+  return stacks;
+}
+
+function buildRouteOrder(stacks) {
+  const custPoints = {};
+  for (const s of stacks) {
+    if (!(s.custCode in custPoints) && s.lat != null && s.lng != null) custPoints[s.custCode] = [s.lat, s.lng];
+  }
+  const noGeo = [...new Set(stacks.filter(s => !(s.custCode in custPoints)).map(s => s.custCode))].sort();
+  const routeOrder = {};
+  const keys = Object.keys(custPoints);
+  if (keys.length) {
+    // nearest-neighbour chain starting from the plant depot: the first customer in
+    // route order is the one closest to the factory, then each closest unvisited one.
+    const remaining = { ...custPoints };
+    const plant = currentPlantPoint();
+    let cur = [plant.lat, plant.lng], curCode = 'PLANT';
+    const orderSeq = [];
+    while (Object.keys(remaining).length) {
+      let nxt = null, nxtD = Infinity;
+      for (const c in remaining) {
+        const d = roadKm(curCode, cur, c, remaining[c]);
+        if (d < nxtD) { nxtD = d; nxt = c; }
+      }
+      orderSeq.push(nxt);
+      cur = remaining[nxt];
+      curCode = nxt;
+      delete remaining[nxt];
+    }
+    orderSeq.forEach((c, i) => routeOrder[c] = i);
+  }
+  noGeo.forEach((c, i) => routeOrder[c] = Object.keys(routeOrder).length + i);
+  return { routeOrder, custPoints };
+}
+
+function newTruck() { return { rows: [], curX: 0, skyline: [{ z0: 0, z1: TRUCK_W, x: 0 }], _custSet: new Set(), _cargoVol: 0, _ns: null, _ew: null, _dirSet: false, _route: null, _mainRoad: null, _routeSet: false, _placementOrder: [] }; }
+
+// forces placeStackSequential to use the row packer even in manual mode -- set only while
+// re-running a truck that the skyline packer produced spatial interleaving for (see
+// hasInterleaving / computePlan). The skyline packer isn't structurally interleave-proof the
+// way the row packer is (it can, in principle, fill a gap that a later group's stack should
+// have "passed" first), so this is the safety net that turns "verified interleaving-free
+// across real data" into "guaranteed," matching the hard no-interleaving requirement.
+let forceRowPacking = false;
+
+// true if, once items are laid out left-to-right by physical position, some group's stacks
+// get split around a group that ISN'T next to it in loading order. A group reappearing after
+// the very next (or previous) group's stack is fine -- that's just two adjacent groups
+// sharing a tight gap, exactly what the skyline packer is supposed to do -- but a group
+// getting split around some UNRELATED, non-adjacent group is a real problem (you'd have to
+// dig past someone else's order to reach it). Rank = the order groups were first placed
+// (chronological), which matches the eventual dispatch-sheet seq numbering; checked by
+// stackGroupKey rather than `seq` itself since this runs before seq numbers exist yet.
+function hasInterleaving(items) {
+  const rankByKey = {};
+  let nextRank = 0;
+  for (const it of items) {
+    const key = stackGroupKey(it);
+    if (!(key in rankByKey)) rankByKey[key] = nextRank++;
+  }
+  const sortedByX = [...items].sort((a, b) => a.x - b.x);
+  const runs = [];
+  for (const it of sortedByX) {
+    const key = stackGroupKey(it);
+    if (!runs.length || runs[runs.length - 1].key !== key) runs.push({ key, rank: rankByKey[key] });
+  }
+  const firstIdx = {}, lastIdx = {};
+  runs.forEach((r, i) => { if (!(r.key in firstIdx)) firstIdx[r.key] = i; lastIdx[r.key] = i; });
+  for (const key in firstIdx) {
+    const myRank = rankByKey[key];
+    for (let i = firstIdx[key] + 1; i < lastIdx[key]; i++) {
+      if (runs[i].key === key) continue;
+      if (Math.abs(runs[i].rank - myRank) > 1) return true;
+    }
+  }
+  return false;
+}
+
+// which side of the plant (origin) a customer sits on, along each axis independently. A
+// customer within DIRECTION_EXEMPT_RADIUS_KM of the plant is reported as having no
+// direction at all (both null) -- directionCompatible/lockTruckDirection already treat a
+// null axis as "no constraint on this axis," so this alone is enough to exempt close
+// customers from the direction rule without touching either of those functions.
+function custDirection(custCode, custPoints) {
+  const p = custPoints[custCode];
+  if (!p) return { ns: null, ew: null };
+  const plant = currentPlantPoint();
+  if (roadKm('PLANT', [plant.lat, plant.lng], custCode, p) <= DIRECTION_EXEMPT_RADIUS_KM) {
+    return { ns: null, ew: null };
+  }
+  return {
+    ns: p[0] > plant.lat ? 'N' : (p[0] < plant.lat ? 'S' : null),
+    ew: p[1] > plant.lng ? 'E' : (p[1] < plant.lng ? 'W' : null),
+  };
+}
+
+// a truck's customer combination must not straddle the plant: once its first customer fixes
+// which side of the plant it's on (north/south, east/west), every later customer added to
+// that truck has to be on the same side along both axes — a truck can't have one stop north
+// of the plant and another south of it, or one east and one west, even if that would pack
+// tighter or shave a little distance, because it'd mean the truck backtracking past the plant.
+function directionCompatible(truck, custCode, custPoints) {
+  if (!truck._dirSet) return true;
+  const d = custDirection(custCode, custPoints);
+  if (truck._ns && d.ns && truck._ns !== d.ns) return false;
+  if (truck._ew && d.ew && truck._ew !== d.ew) return false;
+  return true;
+}
+function lockTruckDirection(truck, custCode, custPoints) {
+  if (truck._dirSet) return;
+  const d = custDirection(custCode, custPoints);
+  if (d.ns != null || d.ew != null) { truck._ns = d.ns; truck._ew = d.ew; truck._dirSet = true; }
+}
+
+// 路線(occ735)/主幹道(occ734): the ERP's own pre-assigned delivery route beats the plant-
+// quadrant heuristic above when a customer actually has one -- it's a more precise grouping
+// than N/S/E/W, set by the people who actually plan these routes. Only ~21% of customers have
+// a route code, though, so this and the direction-based check below have to coexist: a truck
+// locks to whichever grouping mode its FIRST customer determines, and a customer of the other
+// kind (route vs. route-less) can never join it afterward -- the two groupings never mix in
+// one truck.
+function groupingCompatible(truck, custCode, custRouteByCode, custPoints) {
+  const route = custRouteByCode[custCode] || null;
+  if (truck._routeSet) return route === truck._route;
+  if (truck._dirSet) return route ? false : directionCompatible(truck, custCode, custPoints);
+  return true; // truck empty so far -- anyone can start it; locking happens in lockTruckGrouping
+}
+function lockTruckGrouping(truck, custCode, custRouteByCode, custMainRoadByCode, custPoints) {
+  if (truck._routeSet || truck._dirSet) return;
+  const route = custRouteByCode[custCode] || null;
+  if (route) {
+    truck._route = route;
+    truck._mainRoad = custMainRoadByCode[custCode] || null;
+    truck._routeSet = true;
+    return;
+  }
+  lockTruckDirection(truck, custCode, custPoints);
+}
+
+// find where `stack` would land in `truck` without mutating anything yet. Tries both the
+// box's own orientation and it rotated 90 degrees, and where both would technically fit,
+// prefers whichever uses LESS width (smaller dy) -- that leaves the most room in the row for
+// a second, different item to share it with, which is what actually drives loading rate in a
+// shelf packer. (First attempt at this picked whichever wasted less width FOR THIS ITEM
+// ALONE, i.e. the LARGER dy -- that's backwards: it greedily eats the width a future item
+// would have shared, and measured dramatically worse, 81%->52% utilisation on real pallet
+// data. Minimising dy, not maximising it, is the fix.)
+function findFit(truck, stack) {
+  const w = stack.w, l = stack.l;
+  for (const row of truck.rows) {
+    let best = null;
+    for (const [dx, dy] of [[l, w], [w, l]]) {
+      if (dy <= row.freeY && dx <= row.depth) {
+        if (!best || dy < best.dy) best = { row, dx, dy };
+      }
+    }
+    if (best) return best;
+  }
+  let bestNew = null;
+  for (const [dx, dy] of [[l, w], [w, l]]) {
+    if (dx <= (TRUCK_L - truck.curX) && dy <= TRUCK_W) {
+      if (!bestNew || dy < bestNew.dy) bestNew = { newRow: true, dx, dy };
+    }
+  }
+  return bestNew;
+}
+// only considers the most-recently-opened row (or a fresh one) -- a stack can never land in
+// a row that's no longer "current." Because packOrder is already fully group-clustered, this
+// keeps each group's own stacks strictly together while still letting the group immediately
+// after it share that same row's leftover space if there's room. (Tried several alternative
+// packers -- guillotine and skyline free-rectangle strategies that give each group its own
+// private region -- but they measured WORSE in practice: giving every group an isolated
+// rectangle forfeits exactly the "two small adjacent groups share one row's leftover width"
+// trick that makes this sequential approach efficient, which matters a lot when many groups
+// are just one or two stacks each.) Like findFit, prefers whichever orientation uses less
+// width (smaller dy), leaving more room for the row to be shared.
+function findFitLastRowOnly(truck, stack) {
+  const w = stack.w, l = stack.l;
+  const lastRow = truck.rows[truck.rows.length - 1];
+  if (lastRow) {
+    let best = null;
+    for (const [dx, dy] of [[l, w], [w, l]]) {
+      if (dy <= lastRow.freeY && dx <= lastRow.depth) {
+        if (!best || dy < best.dy) best = { row: lastRow, dx, dy };
+      }
+    }
+    if (best) return best;
+  }
+  let bestNew = null;
+  for (const [dx, dy] of [[l, w], [w, l]]) {
+    if (dx <= (TRUCK_L - truck.curX) && dy <= TRUCK_W) {
+      if (!bestNew || dy < bestNew.dy) bestNew = { newRow: true, dx, dy };
+    }
+  }
+  return bestNew;
+}
+
+// 手工疊車 only: a skyline tracks the current fill-length along the truck independently for
+// each width slice, instead of locking a whole row to one fixed depth the way findFitLastRowOnly
+// does. That fixed-depth-per-row rule is exactly why, with manual mode's wildly varied box
+// footprints (no pallet sizes to standardise around), a differently-shaped item can't share
+// a row even when there's plenty of leftover width next to it -- measured ~19% of floor
+// width going unused this way across real data. The skyline instead always fills whichever
+// position gives the LOWEST resulting x (bottom-left-fill), so a smaller/differently-shaped
+// item naturally slots into whatever gap is currently most advanced, keeping the pack tight.
+function findSkylineFit(truck, stack) {
+  const boundaries = [...new Set(truck.skyline.flatMap(s => [s.z0, s.z1]))].sort((a, b) => a - b);
+  let best = null;
+  for (const [depth, width] of [[stack.l, stack.w], [stack.w, stack.l]]) {
+    if (width <= 0 || depth <= 0 || width > TRUCK_W) continue;
+    for (const z0 of boundaries) {
+      const z1 = z0 + width;
+      if (z1 > TRUCK_W + 0.001) continue;
+      let maxX = 0;
+      for (const s of truck.skyline) { if (s.z1 <= z0 || s.z0 >= z1) continue; maxX = Math.max(maxX, s.x); }
+      if (maxX + depth > TRUCK_L + 0.001) continue;
+      if (!best || maxX < best.x || (maxX === best.x && z0 < best.z0)) best = { x: maxX, z0, z1, depth, width };
+    }
+  }
+  return best;
+}
+function applySkylineFit(truck, stack, fit) {
+  const placed = { ...stack, x: fit.x, y: fit.z0, dx: fit.depth, dy: fit.width };
+  const next = [];
+  for (const s of truck.skyline) {
+    if (s.z1 <= fit.z0 || s.z0 >= fit.z1) { next.push(s); continue; }
+    if (s.z0 < fit.z0) next.push({ z0: s.z0, z1: fit.z0, x: s.x });
+    if (s.z1 > fit.z1) next.push({ z0: fit.z1, z1: s.z1, x: s.x });
+  }
+  next.push({ z0: fit.z0, z1: fit.z1, x: fit.x + fit.depth });
+  next.sort((a, b) => a.z0 - b.z0);
+  const merged = [];
+  for (const s of next) {
+    if (merged.length && merged[merged.length - 1].x === s.x && Math.abs(merged[merged.length - 1].z1 - s.z0) < 0.001) {
+      merged[merged.length - 1].z1 = s.z1;
+    } else merged.push({ ...s });
+  }
+  truck.skyline = merged;
+  truck._cargoVol += fit.depth * fit.width * stack.height;
+  truck._custSet.add(stack.custCode);
+  truck._placementOrder.push(placed);
+  return placed;
+}
+
+// places `stack` into `truck`, returns true/false for success, mutating `truck` on success.
+// Manual mode uses the skyline packer (see above); pallet mode keeps the original
+// findFitLastRowOnly/applyFit row packer unchanged, since standard pallet sizes already tile
+// rows near-perfectly and the row model isn't the bottleneck there.
+//
+// Same-customer on-top stacking (手工疊車's "同客戶相鄰裝車序號可以疊在另一筆訂單的上方") is
+// decided BEFORE this function ever runs, by packManualColumns -- a stack arriving here may
+// already be a merged column (its "height" is the full column height, with riders tucked away
+// in "_children" for expandItemsWithChildren to unpack later), but this function just places
+// it as one ordinary unit either way, same as pallet mode. No per-placement "is there room on
+// top of the last thing I placed" logic needed here anymore.
+function placeStackSequential(truck, stack) {
+  if (LOAD_MODE === 'manual' && !forceRowPacking) {
+    const fit = findSkylineFit(truck, stack);
+    if (!fit) return false;
+    applySkylineFit(truck, stack, fit);
+    return true;
+  }
+  const fit = findFitLastRowOnly(truck, stack);
+  if (!fit) return false;
+  applyFit(truck, stack, fit);
+  return true;
+}
+
+// Places every stack in `stacks` (one group's own stack-instances) into `truck`, in the order
+// given. Returns false (without fully committing further placements) if some stack genuinely
+// can't be placed at all. (Used to reorder here to opportunistically stack a later group's
+// stack on top of an open column mid-placement -- that decision is made upfront now, by
+// packManualColumns, so a "stack" arriving here may already be a merged column carrying its
+// riders in "_children"; this function just needs to find it ONE floor position.)
+function placeGroupStacks(truck, stacks) {
+  for (const s of stacks) {
+    if (!placeStackSequential(truck, s)) return false;
+  }
+  return true;
+}
+
+// 手工疊車 only: places `groups` (one customer's whole batch) into `truck` by trying SEVERAL
+// different group orderings and keeping whichever leaves the truck's floor frontier (curX)
+// the LEAST advanced, i.e. whichever packed tightest. Tried and discarded a pure greedy
+// "always place whichever remaining group fits best right now" version first -- it has no way
+// to know a locally-best choice can foreclose a better arrangement later, and verified on real
+// data it sometimes packed a truck LOOSER than the plain sequential order despite the extra
+// O(n^2) cost. This is the standard fix for that failure mode: try multiple candidate
+// orderings (including the original one, unchanged) and take the best result -- since the
+// original order is always one of the candidates, this can never do worse than not trying at
+// all, only equal or better. Same atomic-per-group guarantee as placeGroupStacks throughout
+// (a group's own stacks are never split around another group's, regardless of which strategy
+// produced the winning order).
+// A group order is only safe to place if every rider (a _children entry embedded on one of
+// this group's own stacks, belonging to a DIFFERENT order that packManualColumns folded onto
+// it) never has its own independent/base group scheduled EARLIER in this same order. The
+// dispatch sheet's loading-sequence number for an order is taken from wherever that order's
+// key FIRST appears -- if the rider's own group already claimed an earlier slot, the sheet
+// would tell workers to load that order at that early number, while part of its quantity
+// physically can't go anywhere until the LATER-placed base underneath it already exists.
+// Rejecting orderings that would create that contradiction keeps every stack liftable exactly
+// in the sequence the sheet prints, at the cost of sometimes losing the tightest-packing
+// candidate to a lower-priority one that still respects it.
+function isLoadOrderSafeStackList(stackList) {
+  // first-occurrence-wins, matching how the dispatch sheet itself assigns a seq number to a
+  // key (loadSeq is claimed the first time a key is seen) -- an order can have several of its
+  // OWN independent stacks scattered through stackList (e.g. its leftover quantity split into
+  // more than one full-height column), and it's the EARLIEST of those that determines the seq
+  // workers will see, so that's the one every rider comparison must be checked against. Keying
+  // a plain Map by stackGroupKey and letting later stacks silently overwrite earlier ones would
+  // keep the LAST occurrence instead, which can hide a real violation: an earlier occurrence
+  // could still sit before the base it's meant to be riding on, even though the last one doesn't.
+  const posOf = new Map();
+  stackList.forEach((s, i) => {
+    const k = stackGroupKey(s);
+    if (!posOf.has(k)) posOf.set(k, i);
+  });
+  for (let i = 0; i < stackList.length; i++) {
+    for (const child of (stackList[i]._children || [])) {
+      const childPos = posOf.get(stackGroupKey(child));
+      if (childPos !== undefined && childPos < i) return false;
+    }
+  }
+  return true;
+}
+
+function isLoadOrderSafe(order) {
+  return isLoadOrderSafeStackList(order.flatMap(g => g.stacks));
+}
+
+function placeGroupsBestFit(truck, groups) {
+  // pallet mode's findFitLastRowOnly already tiles rows efficiently with standard pallet
+  // sizes (see placeStackSequential), so the extra trial cost isn't worth it there.
+  if (LOAD_MODE !== 'manual') return placeGroupStacks(truck, groups.flatMap(g => g.stacks));
+
+  const footprint = g => g.stacks[0].w * g.stacks[0].l;
+  const minSide = g => Math.min(g.stacks[0].w, g.stacks[0].l);
+  const strategies = [
+    gs => gs, // original packOrder-derived order (delivery-rank, then footprint descending) --
+              // always loadOrder-safe by construction, since packManualColumns only ever rides
+              // a line onto a column opened by an EARLIER-processed (larger-footprint) line.
+    gs => [...gs].sort((a, b) => footprint(a) - footprint(b)), // smallest footprint first
+    gs => [...gs].sort((a, b) => minSide(a) - minSide(b)), // narrowest side first
+    gs => [...gs].sort((a, b) => minSide(b) - minSide(a)), // widest side first
+  ];
+  let best = null;
+  for (const strategy of strategies) {
+    const order = strategy(groups);
+    if (!isLoadOrderSafe(order)) continue;
+    const trial = cloneTruckState(truck);
+    if (!placeGroupStacks(trial, order.flatMap(g => g.stacks))) continue;
+    if (!best || trial.curX < best.curX) best = trial;
+  }
+  if (!best) return false;
+  Object.assign(truck, best);
+  return true;
+}
+
+// deep-enough copy of a truck's packing state to try placements against without touching
+// the original -- used both by packStacksIntoTrucks (testing whether a whole customer fits
+// before committing) and splitIntoSequentialTrucks (testing whether a whole group fits).
+function cloneTruckState(truck) {
+  return {
+    rows: truck.rows.map(r => ({ x0: r.x0, depth: r.depth, usedY: r.usedY, freeY: r.freeY, items: [...r.items] })),
+    curX: truck.curX, skyline: truck.skyline.map(s => ({ ...s })),
+    _custSet: new Set(truck._custSet), _cargoVol: truck._cargoVol,
+    _ns: truck._ns, _ew: truck._ew, _dirSet: truck._dirSet,
+    _route: truck._route, _mainRoad: truck._mainRoad, _routeSet: truck._routeSet,
+    _placementOrder: [...truck._placementOrder],
+  };
+}
+
+// Packs `groups` (already in delivery-priority order) via placeStackSequential, guaranteeing
+// zero interleaving not as "usually works" but structurally: if the next group doesn't fit
+// into the truck being filled, that truck is closed off exactly as-is and a fresh truck is
+// started for it and everything after -- so a group can NEVER end up split around another
+// group's stack. This can use one more physical truck than the theoretical minimum in
+// exchange for that guarantee, which is the trade-off explicitly asked for: no-interleaving
+// is a hard requirement, floor utilisation is the secondary goal. Returns an array of
+// placement-order item arrays, one per resulting physical truck (almost always just one).
+function splitIntoSequentialTrucks(groups, truckL, truckW) {
+  // re-cluster groups into per-customer batches -- packOrder already sorts by delivery rank
+  // (the same for every group belonging to one customer), so a customer's own groups are
+  // already contiguous here; this just treats them as one atomic placement unit. Without
+  // this, a forced split (below) lands wherever the FIRST group that doesn't fit happens to
+  // be, which can split a customer's own orders across two trucks even when their combined
+  // footprint would easily fit one -- the split boundary was about a group, not about
+  // whether THIS customer fits, and those aren't the same thing.
+  const custBatches = [];
+  for (const g of groups) {
+    const custCode = g.stacks[0].custCode;
+    if (!custBatches.length || custBatches[custBatches.length - 1].custCode !== custCode) {
+      custBatches.push({ custCode, groups: [] });
+    }
+    custBatches[custBatches.length - 1].groups.push(g);
+  }
+
+  const results = [];
+  let truck = newTruck();
+  for (const batch of custBatches) {
+    // try the whole customer atomically against a scratch copy of the truck being filled.
+    const trial = cloneTruckState(truck);
+    if (placeGroupsBestFit(trial, batch.groups)) { truck = trial; continue; }
+    if (truck._placementOrder.length) results.push(truck._placementOrder);
+
+    // doesn't fit what's left of the current truck -- try a fresh (empty) one for the WHOLE
+    // customer before ever splitting them across trucks.
+    const freshTrial = newTruck();
+    if (placeGroupsBestFit(freshTrial, batch.groups)) { truck = freshTrial; continue; }
+
+    // doesn't fit even a single empty truck -- this customer's own order genuinely needs
+    // more than one truck by itself. First try findFit -- the same full-row-search packer
+    // membership uses, measurably more space-efficient than the sequential/skyline packer
+    // above -- across as few dedicated trucks as possible. There's no OTHER customer in
+    // these trucks, so the only interleaving risk is between this customer's OWN groups;
+    // verify for that before using the result, and fall back to the guaranteed-safe
+    // group-by-group sequential packer if it's not clean. Verified on real data this
+    // closes most of the gap between what membership decides a customer needs (findFit)
+    // and what the stricter delivery-ordered repack was otherwise settling for.
+    const allStacks = [];
+    for (const g of batch.groups) for (const s of g.stacks) allStacks.push(s);
+    const sortedForFit = [...allStacks].sort((a, b) => (b.w * b.l) - (a.w * a.l) /* no alphabetical tiebreak: same-footprint stacks must keep the
+          relative order packManualColumns created them in, since that order IS the base/rider
+          dependency -- an alphabetical-by-key tiebreak would reorder same-footprint ties by
+          coincidence of item-code spelling, which can silently swap a rider ahead of the very
+          base it was merged onto. Array.prototype.sort is spec-guaranteed stable, so leaving
+          ties unresolved here preserves whatever order they already arrived in instead. */);
+    const dedicatedTrucks = [];
+    {
+      let dt = newTruck();
+      for (const s of sortedForFit) {
+        let fit = findFit(dt, s);
+        if (!fit) {
+          dedicatedTrucks.push(dt);
+          dt = newTruck();
+          fit = findFit(dt, s);
+        }
+        if (!fit) {
+          console.warn('Stack does not fit an empty truck in any orientation, excluded:', s);
+          continue;
+        }
+        applyFit(dt, s, fit);
+      }
+      dedicatedTrucks.push(dt);
+    }
+    if (dedicatedTrucks.every(dt => !hasInterleaving(dt._placementOrder) && isLoadOrderSafeStackList(dt._placementOrder))) {
+      for (const dt of dedicatedTrucks) results.push(dt._placementOrder);
+      truck = newTruck();
+      continue;
+    }
+
+    // findFit's flexibility caused this customer's own groups to interleave -- fall back to
+    // the guaranteed-safe group-by-group sequential approach (still atomic per group, so a
+    // single order/item/flute/dims combination is never itself scattered), falling back
+    // further to per-stack spillover only if one group alone doesn't fit a fresh truck.
+    truck = newTruck();
+    for (const g of batch.groups) {
+      const gTrial = cloneTruckState(truck);
+      if (placeGroupStacks(gTrial, g.stacks)) { truck = gTrial; continue; }
+      if (truck._placementOrder.length) results.push(truck._placementOrder);
+      truck = newTruck();
+      if (!placeGroupStacks(truck, g.stacks)) {
+        for (const s of g.stacks) {
+          if (!placeStackSequential(truck, s)) {
+            if (truck._placementOrder.length) results.push(truck._placementOrder);
+            truck = newTruck();
+            if (!placeStackSequential(truck, s)) {
+              // genuinely doesn't fit an empty truck bed in any orientation -- buildStacks'
+              // flat/vertical pre-check should catch this already, but skip (instead of the
+              // previous silent force-placement past the truck's actual bounds) if some other
+              // combination slips through.
+              console.warn('Stack does not fit an empty truck bed in any orientation, excluded:', s);
+            }
+          }
+        }
+      }
+    }
+  }
+  if (truck._placementOrder.length) results.push(truck._placementOrder);
+  return results;
+}
+function applyFit(truck, stack, fit) {
+  let placed;
+  if (fit.row) {
+    const row = fit.row;
+    placed = { ...stack, x: row.x0, y: row.usedY, dx: fit.dx, dy: fit.dy };
+    row.items.push(placed);
+    row.usedY += fit.dy; row.freeY -= fit.dy;
+  } else {
+    const row = { x0: truck.curX, depth: fit.dx, usedY: 0, freeY: TRUCK_W, items: [] };
+    placed = { ...stack, x: row.x0, y: 0, dx: fit.dx, dy: fit.dy };
+    row.items.push(placed);
+    row.usedY += fit.dy; row.freeY -= fit.dy;
+    truck.rows.push(row);
+    truck.curX += fit.dx;
+  }
+  truck._cargoVol += fit.dx * fit.dy * stack.height;
+  truck._custSet.add(stack.custCode);
+  // chronological placement order (as opposed to rows[]/row.items[] order, which is by
+  // physical position) -- a later-processed item can still land in an earlier row if that
+  // row has leftover space, which would otherwise split a same-item group's run apart when
+  // items are read out by physical position instead of by when they were actually placed.
+  truck._placementOrder.push(placed);
+}
+
+// real driving distance from stack's customer to the nearest customer already loaded
+// on this truck — used to break ties between equally-full trucks (only used to break ties).
+function truckProximity(truck, stack, custPoints) {
+  const p = custPoints[stack.custCode];
+  if (!p) return 0;
+  if (truck._custSet.has(stack.custCode)) return 0;
+  let minD = Infinity;
+  for (const c of truck._custSet) {
+    const q = custPoints[c];
+    if (!q) continue;
+    const d = roadKm(stack.custCode, p, c, q);
+    if (d < minD) minD = d;
+  }
+  return minD === Infinity ? 0 : minD;
+}
+
+// Best-fit-decreasing bin packing, applied at the CUSTOMER level: a customer's entire stack
+// list is tried atomically against each open truck (largest customers first, so trucks fill
+// efficiently the same way size-first-decreasing always has), and only committed to whichever
+// truck can hold ALL of it and leaves the LEAST unused cargo VOLUME afterward (tie-broken by
+// proximity) — matches the stated priority: 裝載率優先, 距離其次, now with "same customer, same
+// truck" as a precondition rather than an afterthought. Volume, not floor area, since that's
+// what 裝載率 itself means (see the util calc below) -- a truck can look "full" by floor space
+// while sitting mostly empty above a short pallet, so bucketing by floor area was steering
+// this exact decision by a different number than the one it claims to optimize for. The
+// per-placement geometry check (findFit) still has to be floor/skyline-based -- that part is
+// real physical feasibility, not a preference, and volume alone can't tell you whether a
+// box's footprint fits at some position. A customer only gets split across multiple trucks in
+// the rare case where not even a single empty truck can hold their full order -- see the
+// fallback loop at the bottom, which is the only place stacks are still placed one at a time.
+// A truck is only eligible for a customer if that customer shares the truck's locked route
+// (occ735, when the customer has one) or is on the same side of the plant as the truck's
+// existing customers otherwise — see groupingCompatible().
+function packStacksIntoTrucks(stacks, maxCustomers, custPoints, custRouteByCode, custMainRoadByCode) {
+  const trucks = [];
+  const TRUCK_VOL = TRUCK_L * TRUCK_W * TRUCK_H;
+  const VOL_BUCKET = TRUCK_VOL * 0.014; // ~1.4% of truck volume: trucks within the same bucket count as "equally full"
+
+  const byCust = new Map();
+  for (const s of stacks) {
+    if (!byCust.has(s.custCode)) byCust.set(s.custCode, []);
+    byCust.get(s.custCode).push(s);
+  }
+  const custGroups = [...byCust.values()]
+    .map(list => [...list].sort((a, b) => (b.w * b.l) - (a.w * a.l) /* no alphabetical tiebreak: same-footprint stacks must keep the
+          relative order packManualColumns created them in, since that order IS the base/rider
+          dependency -- an alphabetical-by-key tiebreak would reorder same-footprint ties by
+          coincidence of item-code spelling, which can silently swap a rider ahead of the very
+          base it was merged onto. Array.prototype.sort is spec-guaranteed stable, so leaving
+          ties unresolved here preserves whatever order they already arrived in instead. */))
+    .sort((a, b) => b.reduce((s, x) => s + x.w * x.l, 0) - a.reduce((s, x) => s + x.w * x.l, 0));
+
+  for (const custStacks of custGroups) {
+    const custCode = custStacks[0].custCode;
+
+    let bestIdx = -1, bestState = null, bestBucket = Infinity, bestProx = Infinity;
+    for (let i = 0; i < trucks.length; i++) {
+      const truck = trucks[i];
+      if (!truck._custSet.has(custCode)) {
+        if (truck._custSet.size >= maxCustomers) continue;
+        if (!groupingCompatible(truck, custCode, custRouteByCode, custPoints)) continue;
+      }
+      const trial = cloneTruckState(truck);
+      let ok = true;
+      for (const s of custStacks) {
+        const fit = findFit(trial, s);
+        if (!fit) { ok = false; break; }
+        applyFit(trial, s, fit);
+      }
+      if (!ok) continue;
+      const remaining = TRUCK_VOL - trial._cargoVol;
+      const bucket = Math.floor(remaining / VOL_BUCKET);
+      const prox = truckProximity(truck, custStacks[0], custPoints);
+      if (bucket < bestBucket || (bucket === bestBucket && prox < bestProx)) {
+        bestIdx = i; bestState = trial; bestBucket = bucket; bestProx = prox;
+      }
+    }
+    if (bestIdx >= 0) {
+      trucks[bestIdx] = bestState;
+      lockTruckGrouping(trucks[bestIdx], custCode, custRouteByCode, custMainRoadByCode, custPoints);
+      continue;
+    }
+
+    // no existing truck can take the whole customer -- try a brand new (empty) truck before
+    // ever resorting to splitting.
+    const fresh = newTruck();
+    let freshOk = true;
+    for (const s of custStacks) {
+      const fit = findFit(fresh, s);
+      if (!fit) { freshOk = false; break; }
+      applyFit(fresh, s, fit);
+    }
+    if (freshOk) {
+      trucks.push(fresh);
+      lockTruckGrouping(fresh, custCode, custRouteByCode, custMainRoadByCode, custPoints);
+      continue;
+    }
+
+    // doesn't fit any single truck even empty -- this customer's own order genuinely needs
+    // more than one truck. Pack their own stacks into as few DEDICATED trucks as possible
+    // first (fresh truck, fill it via findFit, open another only once it's actually full),
+    // rather than searching every existing truck per stack -- that per-stack search sounds
+    // more "efficient" but in practice scatters a big order across whatever scraps of room
+    // happen to be open on OTHER customers' trucks, which is exactly the opposite of "same
+    // customer, same truck": verified on real data, a 111-stack customer that should need 4
+    // trucks by floor area was landing on 6, several under 25% full, because individual
+    // stacks kept peeling off into unrelated trucks instead of staying together. The last
+    // dedicated truck here can still pick up other customers in later iterations of this
+    // same loop (it's a completely normal truck once added to `trucks`), so nothing about
+    // this loses the ability to backfill leftover room -- it just isn't THIS customer's job
+    // to go hunting for scraps in the middle of their own order.
+    let cur = newTruck();
+    for (const s of custStacks) {
+      let fit = findFit(cur, s);
+      if (!fit) {
+        trucks.push(cur);
+        lockTruckGrouping(cur, custCode, custRouteByCode, custMainRoadByCode, custPoints);
+        cur = newTruck();
+        fit = findFit(cur, s);
+      }
+      if (!fit) {
+        // genuinely doesn't fit an empty truck in any orientation -- buildStacks' flat/vertical
+        // pre-check should catch this already, but skip rather than crash the whole report if
+        // some other combination slips through.
+        console.warn('Stack does not fit an empty truck in any orientation, excluded:', s);
+        continue;
+      }
+      applyFit(cur, s, fit);
+    }
+    trucks.push(cur);
+    lockTruckGrouping(cur, custCode, custRouteByCode, custMainRoadByCode, custPoints);
+  }
+  return trucks;
+}
+
+// two trucks can only be merged if their locked directions don't conflict on either axis
+// (same rule directionCompatible uses for a single customer against a truck, just applied
+// truck-to-truck).
+function trucksDirectionCompatible(a, b) {
+  if (a._ns && b._ns && a._ns !== b._ns) return false;
+  if (a._ew && b._ew && a._ew !== b._ew) return false;
+  return true;
+}
+// route-locked trucks merge on an exact route match, or -- 路線未成車的再按主幹道相同的排車
+// -- on a shared 主幹道 (main road) when the routes differ but the highway corridor to reach
+// them is the same; this pass only ever fires between trucks that still have room for each
+// other (see below), so a route that already filled a truck on its own never gets merged into
+// anything else regardless of what this returns. A route-locked truck never merges with a
+// route-less (direction-locked) one -- the two groupings stay separate all the way through.
+function trucksGroupingCompatible(a, b) {
+  if (a._routeSet && b._routeSet) {
+    if (a._route === b._route) return true;
+    return !!a._mainRoad && a._mainRoad === b._mainRoad;
+  }
+  if (a._routeSet || b._routeSet) return false;
+  return trucksDirectionCompatible(a, b);
+}
+
+// Best-fit-decreasing (even customer-atomic) is still a single forward pass: by the time a
+// small, late-processed customer is placed, an earlier truck can look "full enough" to
+// reject them even though, in hindsight, two separate under-filled trucks could have been
+// one truck all along. This pass looks for exactly that after the fact -- any two
+// direction-compatible trucks whose combined customers don't exceed maxCustomers, where
+// ALL of one truck's stacks fit into the other -- and merges them, repeating (always trying
+// the least-full-by-volume truck first, since it's the best candidate to be fully absorbed --
+// same 裝載率-not-floor-area reasoning as packStacksIntoTrucks above) until no more merges are
+// possible. Directly trades a bit of extra computation for fewer, fuller trucks, which is the
+// explicit ask: consolidate first, worry about anything else after.
+function consolidateTrucks(trucks, maxCustomers, custPoints) {
+  let merged = true;
+  while (merged) {
+    merged = false;
+    trucks.sort((a, b) => a._cargoVol - b._cargoVol);
+    outer:
+    for (let i = 0; i < trucks.length; i++) {
+      const donor = trucks[i];
+      const donorStacks = [];
+      for (const row of donor.rows) for (const it of row.items) {
+        const { x, y, dx, dy, ...stack } = it;
+        donorStacks.push(stack);
+      }
+      for (let j = 0; j < trucks.length; j++) {
+        if (i === j) continue;
+        const host = trucks[j];
+        const combinedCustCount = new Set([...donor._custSet, ...host._custSet]).size;
+        if (combinedCustCount > maxCustomers) continue;
+        if (!trucksGroupingCompatible(donor, host)) continue;
+        const trial = cloneTruckState(host);
+        let ok = true;
+        for (const s of donorStacks) {
+          const fit = findFit(trial, s);
+          if (!fit) { ok = false; break; }
+          applyFit(trial, s, fit);
+        }
+        if (!ok) continue;
+        trucks[j] = trial;
+        trucks.splice(i, 1);
+        merged = true;
+        break outer;
+      }
+    }
+  }
+  return trucks;
+}
+
+function computePlan(lines) {
+  const stacks = buildStacks(lines);
+  const { custPoints } = buildRouteOrder(stacks);
+  const custNameByCode = {};
+  for (const s of stacks) if (!(s.custCode in custNameByCode)) custNameByCode[s.custCode] = s.custName;
+  const custRouteByCode = {};
+  const custMainRoadByCode = {};
+  for (const s of stacks) {
+    if (!(s.custCode in custRouteByCode)) custRouteByCode[s.custCode] = s.route;
+    if (!(s.custCode in custMainRoadByCode)) custMainRoadByCode[s.custCode] = s.mainRoad;
+  }
+
+  // never mix delivery dates on one truck — group first; packing order within a date
+  // is decided by packStacksIntoTrucks itself (loading rate first, distance second).
+  const byDate = new Map();
+  for (const s of stacks) {
+    if (!byDate.has(s.deliveryDate)) byDate.set(s.deliveryDate, []);
+    byDate.get(s.deliveryDate).push(s);
+  }
+  const dateKeys = [...byDate.keys()].sort();
+
+  const compactTrucks = [];
+  const customersSet = new Map();
+  for (const s of stacks) customersSet.set(s.custCode, s.custName);
+  const customers = [...customersSet.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const custIndex = {}; customers.forEach(([c], i) => custIndex[c] = i);
+  const custLabels = customers.map(([c, n]) => `${c} ${n}`);
+
+  let truckNo = 0;
+  for (const dd of dateKeys) {
+    const trucksRaw = consolidateTrucks(packStacksIntoTrucks(byDate.get(dd), MAX_CUSTOMERS_PER_TRUCK, custPoints, custRouteByCode, custMainRoadByCode), MAX_CUSTOMERS_PER_TRUCK, custPoints);
+    const plantPt = currentPlantPoint();
+    function computeStopsFor(custCodes) {
+      const stops = [];
+      const remaining = new Map(custCodes.map(c => [c, custPoints[c]]));
+      let cur = [plantPt.lat, plantPt.lng], curCode = 'PLANT';
+      while (remaining.size) {
+        let nxt = null, nxtD = Infinity;
+        for (const [c, p] of remaining) {
+          const d = roadKm(curCode, cur, c, p);
+          if (d < nxtD) { nxtD = d; nxt = c; }
+        }
+        const p = remaining.get(nxt);
+        stops.push({ code: nxt, name: custNameByCode[nxt], lat: p[0], lng: p[1] });
+        cur = p;
+        curCode = nxt;
+        remaining.delete(nxt);
+      }
+      // nearest-neighbour alone often leaves one long doubling-back leg; 2-opt cleans that
+      // up so both the reported distance and the delivery/loading order it drives are the
+      // shorter route, not just a greedy one.
+      return twoOptImprove(stops, 'PLANT', [plantPt.lat, plantPt.lng]);
+    }
+
+    // repacks one logical truck's raw stacks (delivery-rank sort -> groups ->
+    // splitIntoSequentialTrucks, with the manual-mode interleaving double-check) -- shared by
+    // the main per-truck pass below and the backfill pass, since a backfill attempt is just
+    // this same repack run again on a combined stack list.
+    function repackTruckOnce(rawStacks) {
+      const custsWithGeo = [...new Set(rawStacks.map(it => it.custCode))].filter(c => custPoints[c]);
+      const stopsForOrder = computeStopsFor(custsWithGeo);
+      const deliveryRank = {};
+      stopsForOrder.forEach((s, i) => deliveryRank[s.code] = i);
+      const lastRank = stopsForOrder.length;
+      const packOrder = [...rawStacks].sort((a, b) => {
+        const ra = a.custCode in deliveryRank ? deliveryRank[a.custCode] : lastRank;
+        const rb = b.custCode in deliveryRank ? deliveryRank[b.custCode] : lastRank;
+        if (rb !== ra) return rb - ra; // higher rank (delivered later) placed first
+        return (b.w * b.l) - (a.w * a.l) /* no alphabetical tiebreak: same-footprint stacks must keep the
+          relative order packManualColumns created them in, since that order IS the base/rider
+          dependency -- an alphabetical-by-key tiebreak would reorder same-footprint ties by
+          coincidence of item-code spelling, which can silently swap a rider ahead of the very
+          base it was merged onto. Array.prototype.sort is spec-guaranteed stable, so leaving
+          ties unresolved here preserves whatever order they already arrived in instead. */;
+      });
+      const groups = [];
+      for (const s of packOrder) {
+        const gk = stackGroupKey(s);
+        if (!groups.length || groups[groups.length - 1].key !== gk) groups.push({ key: gk, stacks: [] });
+        groups[groups.length - 1].stacks.push(s);
+      }
+      let subTruckItemsList = splitIntoSequentialTrucks(groups, TRUCK_L, TRUCK_W);
+      if (LOAD_MODE === 'manual' && subTruckItemsList.some(hasInterleaving)) {
+        forceRowPacking = true;
+        subTruckItemsList = splitIntoSequentialTrucks(groups, TRUCK_L, TRUCK_W);
+        forceRowPacking = false;
+      }
+      return subTruckItemsList;
+    }
+
+    // 手工疊車 only: the stacking decision (packManualColumns, which orders ride on top of which)
+    // and the floor-placement decision (repackTruckOnce's skyline packing) are coupled -- a
+    // stacking choice made with zero visibility into the floor layout can use up an item that
+    // would have completed a row perfectly side by side, and floor placement can only work with
+    // whatever units stacking already committed to; it has no way to "unstack" something and try
+    // again. Truly solving that jointly (optimal 3D placement with conditional height-merging) is
+    // NP-hard in general. What IS tractable: generate a couple of candidate stacking DECISIONS
+    // for this truck's own cargo, run each one all the way through the real floor placement, and
+    // keep whichever candidate's ACTUAL resulting truck count / floor length is best -- not a
+    // heuristic guess about which one SHOULD be better (an earlier attempt that skipped straight
+    // to a heuristic, without checking the real outcome, made the plan worse overall on real
+    // data). rawStacks itself (the global packManualColumns pass's own decision) is always one of
+    // the candidates, so this can never do worse than not trying at all.
+    function repackTruck(rawStacks) {
+      if (LOAD_MODE !== 'manual') return repackTruckOnce(rawStacks);
+
+      const verticals = rawStacks.filter(s => s.boxW > TRUCK_W && s.boxL > TRUCK_W);
+      const flatStacks = rawStacks.filter(s => !(s.boxW > TRUCK_W && s.boxL > TRUCK_W));
+      const orderLines = flatStacks.length ? unmergeToOrderLines(flatStacks) : [];
+
+      const candidateStackLists = [rawStacks];
+      if (orderLines.length) {
+        candidateStackLists.push([...verticals, ...packManualColumns(orderLines, MANUAL_MAX_TOTAL_HEIGHT, 'none')]);
+      }
+
+      let best = null, bestScore = null;
+      for (const candidate of candidateStackLists) {
+        const result = repackTruckOnce(candidate);
+        const score = packingScore(result);
+        if (!bestScore || scoreIsBetter(score, bestScore)) { best = result; bestScore = score; }
+      }
+      return best;
+    }
+
+    // Phase 1: repack every logical truck from packStacksIntoTrucks/consolidateTrucks into its
+    // own physical truck(s) -- guaranteed non-interleaved, almost always one physical truck,
+    // occasionally more if a truck's best-fit membership turns out too tight to rearrange
+    // contiguously (see splitIntoSequentialTrucks for why that trade-off is made). Collected
+    // here rather than finalized immediately, since the backfill pass below needs to see every
+    // logical truck's result before any of them are turned into compactTrucks entries.
+    const perLogicalTruck = [];
+    for (const t of trucksRaw) {
+      // pull the truck's raw stack list back out (stripping the x/y/dx/dy that
+      // packStacksIntoTrucks assigned) so it can be re-packed in delivery order --
+      // membership is already decided, only the physical arrangement changes here.
+      const rawStacks = [];
+      for (const row of t.rows) for (const it of row.items) {
+        const { x, y, dx, dy, ...stack } = it;
+        rawStacks.push(stack);
+      }
+      perLogicalTruck.push({ rawStacks, subTruckItemsList: repackTruck(rawStacks) });
+    }
+
+    // Phase 2: backfill pass -- a customer's own order can end up needing one extra, nearly-
+    // empty physical truck purely because of floor-shape mismatch during the strict repack
+    // above (a small trailing group not fitting the irregular leftover space, even though a
+    // freely-reordered packing would have room -- see splitIntoSequentialTrucks), even when a
+    // DIFFERENT logical truck on the same date already carries that same customer with genuine
+    // spare room. If the last physical truck from a logical truck that split into multiple
+    // physical trucks holds only one customer, try folding it into another logical truck (one
+    // that stayed exactly one physical truck) that already has that customer, by re-deriving
+    // that whole truck's stack list with the leftover merged in and re-running the exact same
+    // guaranteed-safe repack -- only keeping the result if it's STILL exactly one physical
+    // truck, so this can only ever remove a truck, never introduce interleaving that repackTruck
+    // itself wouldn't already have caught.
+    for (let i = 0; i < perLogicalTruck.length; i++) {
+      const src = perLogicalTruck[i];
+      if (src.subTruckItemsList.length < 2) continue;
+      const lastPhysical = src.subTruckItemsList[src.subTruckItemsList.length - 1];
+      const custsInLast = new Set(lastPhysical.map(it => it.custCode));
+      if (custsInLast.size !== 1) continue;
+      const [onlyCust] = custsInLast;
+      const leftoverRaw = lastPhysical.map(({ x, y, dx, dy, y0, ...s }) => s);
+
+      for (let j = 0; j < perLogicalTruck.length; j++) {
+        if (j === i) continue;
+        const tgt = perLogicalTruck[j];
+        if (tgt.subTruckItemsList.length !== 1) continue;
+        if (!tgt.rawStacks.some(s => s.custCode === onlyCust)) continue;
+        const combinedRaw = [...tgt.rawStacks, ...leftoverRaw];
+        const combinedSplit = repackTruck(combinedRaw);
+        if (combinedSplit.length === 1) {
+          tgt.rawStacks = combinedRaw;
+          tgt.subTruckItemsList = combinedSplit;
+          src.subTruckItemsList = src.subTruckItemsList.slice(0, -1);
+          break;
+        }
+      }
+    }
+
+    // Phase 3: finalize -- build the compactTrucks entry for every physical truck, after the
+    // backfill pass above has had a chance to eliminate small leftover ones.
+    for (const { subTruckItemsList } of perLogicalTruck) {
+      for (const rawItems of subTruckItemsList) {
+        // manual mode's merged columns (see packManualColumns) travel as one placeable unit
+        // through packing/placement -- unpack each rider back into its own report row/3D item.
+        const items = expandItemsWithChildren(rawItems);
+        truckNo++;
+        // 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積(含棧板底
+        // 高)除以整台車廂容積,才反映得出這台車實際裝了多少東西,而不是只看地板佔了多少。
+        const cargoVol = items.reduce((s, it) => s + it.dx * it.dy * it.height, 0);
+        const custCounts = {};
+        for (const it of items) {
+          const key = it.custCode + '|' + it.custName;
+          custCounts[key] = (custCounts[key] || 0) + 1;
+        }
+        let primaryKey = null, primaryN = -1;
+        for (const k in custCounts) if (custCounts[k] > primaryN) { primaryN = custCounts[k]; primaryKey = k; }
+        const [primaryCode, primaryName] = primaryKey ? primaryKey.split('|') : ['', ''];
+
+        // key = same grouping the dispatch sheet aggregates by (cust+order+item+flute+dims).
+        // loadOrder = the sequence this group was first physically placed onto the truck --
+        // the dispatch sheet lists rows in this order, not delivery-route order, so it reads
+        // top-to-bottom the same way the truck actually gets loaded.
+        const keyOf = stackGroupKey;
+        const agg = {};
+        let loadSeq = 0;
+        for (const it of items) {
+          const key = keyOf(it);
+          if (!agg[key]) agg[key] = {
+            boxes: 0, pallets: 0, caiPerBox: it.caiPerBox, maxCargoH: 0, baseHeight: it.baseHeight,
+            custCode: it.custCode, custName: it.custName, orderNo: it.orderNo, item: it.itemCode, flute: it.fluteType,
+            w: it.boxW, l: it.boxL, t: it.t, palletW: it.nomW, palletL: it.nomL, unitCode: it.unitCode,
+            loadOrder: loadSeq++,
+          };
+          agg[key].boxes += it.boxes;
+          agg[key].pallets += 1;
+          agg[key].maxCargoH = Math.max(agg[key].maxCargoH, it.cargoHeight);
+        }
+        const rowsAgg = Object.values(agg).sort((a, b) => a.loadOrder - b.loadOrder).map((v, i) => ({
+          seq: i + 1,
+          cust_code: v.custCode, cust_name: v.custName, order_no: v.orderNo, item: v.item, flute: v.flute,
+          w: v.w, l: v.l, t: v.t, palletW: v.palletW, palletL: v.palletL,
+          boxes: Math.round(v.boxes), pallets: v.pallets,
+          stackH: round1(v.maxCargoH), palletTotalH: round1(v.maxCargoH + v.baseHeight),
+          caiPerBox: round3(v.caiPerBox), caiTotal: round2(v.caiPerBox * v.boxes),
+          unit: v.unitCode === '1' ? '板' : (v.unitCode === '2' ? '箱' : (v.unitCode || '—')),
+        }));
+
+        // seq per physical stack in the 3D view == the seq of its dispatch-sheet row, so the
+        // number you see on a stack (hover, or the on-model label) is directly the same
+        // number as the row it belongs to — the two views read as one consistent sequence.
+        const seqByKey = {};
+        rowsAgg.forEach((r, i) => { seqByKey[[r.cust_code, r.cust_name, r.order_no, r.item, r.flute, r.w, r.l, r.t, r.palletW, r.palletL].join('||')] = r.seq; });
+        const citems = items.map(it => ({
+          x: round1(it.x), y: round1(it.y), dx: round1(it.dx), dy: round1(it.dy),
+          h: round1(it.height), baseH: it.baseHeight, c: custIndex[it.custCode],
+          o: it.orderNo, it: it.itemCode, b: Math.round(it.boxes), fl: it.fluteType,
+          seq: seqByKey[keyOf(it)],
+          y0: round1(it.y0 || 0),
+        }));
+
+        // this physical truck's own delivery route, from just its own customers (may be a
+        // subset of the original truck's customers if it got split -- see above).
+        const truckCustsWithGeo = [...new Set(items.map(it => it.custCode))].filter(c => custPoints[c]);
+        const stops = computeStopsFor(truckCustsWithGeo);
+        let distKm = 0;
+        if (stops.length) distKm += roadKm('PLANT', [plantPt.lat, plantPt.lng], stops[0].code, [stops[0].lat, stops[0].lng]);
+        for (let i = 0; i < stops.length - 1; i++) distKm += roadKm(stops[i].code, [stops[i].lat, stops[i].lng], stops[i + 1].code, [stops[i + 1].lat, stops[i + 1].lng]);
+
+        const caiTotalTruck = round2(rowsAgg.reduce((s, r) => s + r.caiTotal, 0));
+
+        compactTrucks.push({
+          n: truckNo, deliveryDate: dd,
+          util: round1(cargoVol / (TRUCK_L * TRUCK_W * TRUCK_H) * 100), stacks: items.length,
+          primaryCust: `${primaryCode} ${primaryName}` + (Object.keys(custCounts).length === 1 ? '' : ` 等${Object.keys(custCounts).length}家`),
+          items: citems, rows: rowsAgg,
+          stops, distanceKm: round1(distKm),
+          caiTotal: caiTotalTruck,
+        });
+      }
+    }
+  }
+
+  const allCustPoints = Object.keys(custPoints).map(c => ({ code: c, name: custNameByCode[c], lat: custPoints[c][0], lng: custPoints[c][1] }));
+
+  return {
+    truckDims: { L: TRUCK_L, W: TRUCK_W, H: TRUCK_H },
+    customers: custLabels,
+    allCustPoints,
+    trucks: compactTrucks,
+    meta: {
+      totalOrders: new Set(stacks.map(s => s.orderNo)).size,
+      totalLines: lines.length,
+      totalBoxes: Math.round(stacks.reduce((s, x) => s + x.boxes, 0)),
+      totalTrucks: compactTrucks.length,
+      totalCustomers: customers.length,
+      custWithGeo: Object.keys(custPoints).length,
+      totalCai: round2(compactTrucks.reduce((s, t) => s + t.caiTotal, 0)),
+      totalDistanceKm: round1(compactTrucks.reduce((s, t) => s + t.distanceKm, 0)),
+    },
+  };
+}
+
+// 模擬裝車: place a hand-picked set of order lines into exactly ONE truck (current
+// L/W/H/load-mode/overhang settings), instead of computePlan's full multi-truck /
+// multi-customer-clustering pipeline. Anything that doesn't fit is left unplaced and reported
+// back rather than spilling into a second truck -- the whole point of this mode is to answer
+// "would THESE specific orders load into one truck", not to produce a dispatch plan.
+//
+// Reuses buildStacks/placeStackSequential/expandItemsWithChildren exactly as computePlan does,
+// so pallet-vs-manual mode, same-customer on-top stacking, and the skyline floor packer all
+// behave identically here -- only the multi-truck-splitting and cross-customer-routing layers
+// (packStacksIntoTrucks/consolidateTrucks/splitIntoSequentialTrucks) are skipped, since the
+// user has already hand-picked exactly what should share this one truck.
+function simulateSingleTruck(lines) {
+  const stacks = buildStacks(lines);
+  if (!stacks.length) return null;
+
+  const { custPoints } = buildRouteOrder(stacks);
+  const custNameByCode = {};
+  for (const s of stacks) if (!(s.custCode in custNameByCode)) custNameByCode[s.custCode] = s.custName;
+
+  // reuse the SAME custCode->index mapping the current auto-mode plan already uses (DATA is
+  // always kept in sync with the same order-date/delivery-date filters this picker reads from),
+  // so a customer's legend color/label stays consistent whether you're looking at the automatic
+  // plan or a simulated truck -- and so renderLegend/renderCanvas's `DATA.customers[ci]` lookups
+  // stay valid instead of pointing at the wrong customer.
+  const custIndex = {};
+  (DATA && DATA.customers ? DATA.customers : []).forEach((label, i) => {
+    custIndex[label.slice(0, label.indexOf(' '))] = i;
+  });
+  let nextIdx = Object.keys(custIndex).length;
+  for (const s of stacks) if (!(s.custCode in custIndex)) custIndex[s.custCode] = nextIdx++;
+
+  const plantPt = currentPlantPoint();
+  function computeStopsFor(custCodes) {
+    const stops = [];
+    const remaining = new Map(custCodes.map(c => [c, custPoints[c]]));
+    let cur = [plantPt.lat, plantPt.lng], curCode = 'PLANT';
+    while (remaining.size) {
+      let nxt = null, nxtD = Infinity;
+      for (const [c, p] of remaining) {
+        const d = roadKm(curCode, cur, c, p);
+        if (d < nxtD) { nxtD = d; nxt = c; }
+      }
+      const p = remaining.get(nxt);
+      stops.push({ code: nxt, name: custNameByCode[nxt], lat: p[0], lng: p[1] });
+      cur = p; curCode = nxt;
+      remaining.delete(nxt);
+    }
+    return twoOptImprove(stops, 'PLANT', [plantPt.lat, plantPt.lng]);
+  }
+
+  // same packOrder as repackTruck (delivery-rank, then footprint descending, stable) -- used
+  // as the baseline candidate below, and to build the same customer/order-clustered groups
+  // placeGroupsBestFit operates on.
+  const custsWithGeo = [...new Set(stacks.map(s => s.custCode))].filter(c => custPoints[c]);
+  const stopsForOrder = computeStopsFor(custsWithGeo);
+  const deliveryRank = {};
+  stopsForOrder.forEach((s, i) => deliveryRank[s.code] = i);
+  const lastRank = stopsForOrder.length;
+  const packOrder = [...stacks].sort((a, b) => {
+    const ra = a.custCode in deliveryRank ? deliveryRank[a.custCode] : lastRank;
+    const rb = b.custCode in deliveryRank ? deliveryRank[b.custCode] : lastRank;
+    if (rb !== ra) return rb - ra;
+    return (b.w * b.l) - (a.w * a.l);
+  });
+  const groups = [];
+  for (const s of packOrder) {
+    const gk = stackGroupKey(s);
+    if (!groups.length || groups[groups.length - 1].key !== gk) groups.push({ key: gk, stacks: [] });
+    groups[groups.length - 1].stacks.push(s);
+  }
+
+  // best-effort multi-strategy placement: unlike placeGroupsBestFit (which requires the WHOLE
+  // ordering to fit and then picks whichever packs tightest), a hand-picked selection here may
+  // genuinely be too much for one truck -- a single large/awkward item can get squeezed out
+  // entirely if it lands late in the delivery-rank-first packOrder and nothing big enough is
+  // left to hold it, even though a different ordering would have placed it fine (the same
+  // failure mode placeGroupsBestFit's multi-strategy approach exists to avoid). So this tries
+  // the same set of candidate group orderings but keeps whichever placed the MOST boxes overall
+  // instead of discarding any ordering that leaves something unplaced -- the original packOrder
+  // is always one of the candidates, so this can never do worse than the plain sequential order.
+  const footprint = g => g.stacks[0].w * g.stacks[0].l;
+  const minSide = g => Math.min(g.stacks[0].w, g.stacks[0].l);
+  const strategies = LOAD_MODE === 'manual' ? [
+    gs => gs,
+    gs => [...gs].sort((a, b) => footprint(b) - footprint(a)),
+    gs => [...gs].sort((a, b) => minSide(b) - minSide(a)),
+    gs => [...gs].sort((a, b) => minSide(a) - minSide(b)),
+  ] : [gs => gs];
+
+  let truck = null, unplaced = null, bestPlacedBoxes = -1;
+  for (const strategy of strategies) {
+    const orderedStacks = strategy(groups).flatMap(g => g.stacks);
+    if (LOAD_MODE === 'manual' && !isLoadOrderSafeStackList(orderedStacks)) continue;
+    const trial = newTruck();
+    const trialUnplaced = [];
+    for (const s of orderedStacks) {
+      if (!placeStackSequential(trial, s)) trialUnplaced.push(s);
+    }
+    const placedBoxes = expandItemsWithChildren(trial._placementOrder).reduce((s, it) => s + it.boxes, 0);
+    if (placedBoxes > bestPlacedBoxes) { bestPlacedBoxes = placedBoxes; truck = trial; unplaced = trialUnplaced; }
+  }
+
+  const items = expandItemsWithChildren(truck._placementOrder);
+  const keyOf = stackGroupKey;
+  const agg = {};
+  let loadSeq = 0;
+  for (const it of items) {
+    const key = keyOf(it);
+    if (!agg[key]) agg[key] = {
+      boxes: 0, pallets: 0, caiPerBox: it.caiPerBox, maxCargoH: 0, baseHeight: it.baseHeight,
+      custCode: it.custCode, custName: it.custName, orderNo: it.orderNo, item: it.itemCode, flute: it.fluteType,
+      w: it.boxW, l: it.boxL, t: it.t, palletW: it.nomW, palletL: it.nomL, unitCode: it.unitCode,
+      loadOrder: loadSeq++,
+    };
+    agg[key].boxes += it.boxes;
+    agg[key].pallets += 1;
+    agg[key].maxCargoH = Math.max(agg[key].maxCargoH, it.cargoHeight);
+  }
+  const rowsAgg = Object.values(agg).sort((a, b) => a.loadOrder - b.loadOrder).map((v, i) => ({
+    seq: i + 1,
+    cust_code: v.custCode, cust_name: v.custName, order_no: v.orderNo, item: v.item, flute: v.flute,
+    w: v.w, l: v.l, t: v.t, palletW: v.palletW, palletL: v.palletL,
+    boxes: Math.round(v.boxes), pallets: v.pallets,
+    stackH: round1(v.maxCargoH), palletTotalH: round1(v.maxCargoH + v.baseHeight),
+    caiPerBox: round3(v.caiPerBox), caiTotal: round2(v.caiPerBox * v.boxes),
+    unit: v.unitCode === '1' ? '板' : (v.unitCode === '2' ? '箱' : (v.unitCode || '—')),
+  }));
+
+  const seqByKey = {};
+  rowsAgg.forEach(r => { seqByKey[[r.cust_code, r.cust_name, r.order_no, r.item, r.flute, r.w, r.l, r.t, r.palletW, r.palletL].join('||')] = r.seq; });
+  const citems = items.map(it => ({
+    x: round1(it.x), y: round1(it.y), dx: round1(it.dx), dy: round1(it.dy),
+    h: round1(it.height), baseH: it.baseHeight, c: custIndex[it.custCode],
+    o: it.orderNo, it: it.itemCode, b: Math.round(it.boxes), fl: it.fluteType,
+    seq: seqByKey[keyOf(it)], y0: round1(it.y0 || 0),
+  }));
+
+  const custCounts = {};
+  for (const it of items) { const key = it.custCode + '|' + it.custName; custCounts[key] = (custCounts[key] || 0) + 1; }
+  let primaryKey = null, primaryN = -1;
+  for (const k in custCounts) if (custCounts[k] > primaryN) { primaryN = custCounts[k]; primaryKey = k; }
+  const [primaryCode, primaryName] = primaryKey ? primaryKey.split('|') : ['', ''];
+
+  const cargoVol = items.reduce((s, it) => s + it.dx * it.dy * it.height, 0);
+  const truckCustsWithGeo = [...new Set(items.map(it => it.custCode))].filter(c => custPoints[c]);
+  const stops = computeStopsFor(truckCustsWithGeo);
+  let distKm = 0;
+  if (stops.length) distKm += roadKm('PLANT', [plantPt.lat, plantPt.lng], stops[0].code, [stops[0].lat, stops[0].lng]);
+  for (let i = 0; i < stops.length - 1; i++) distKm += roadKm(stops[i].code, [stops[i].lat, stops[i].lng], stops[i + 1].code, [stops[i + 1].lat, stops[i + 1].lng]);
+  const caiTotalTruck = round2(rowsAgg.reduce((s, r) => s + r.caiTotal, 0));
+
+  // unplaced boxes, aggregated by order+item so the overflow warning reads as a short list
+  // instead of one line per physical stack. A stack that failed to place may be a manual-mode
+  // merged column (packManualColumns) carrying OTHER orders' boxes as riders in "_children" --
+  // those riders never got their own entry in `unplaced` (only the base stack did, and the
+  // base's own "boxes" count excludes them), so they'd silently disappear from this summary
+  // without walking "_children" here too.
+  const unplacedAgg = {};
+  for (const s of unplaced) {
+    for (const p of [s, ...(s._children || [])]) {
+      const key = [p.custCode, p.orderNo, p.itemCode].join('||');
+      if (!unplacedAgg[key]) unplacedAgg[key] = { custCode: p.custCode, custName: p.custName, orderNo: p.orderNo, itemCode: p.itemCode, boxes: 0 };
+      unplacedAgg[key].boxes += p.boxes;
+    }
+  }
+
+  return {
+    truck: {
+      n: '模擬', deliveryDate: '—',
+      util: round1(cargoVol / (TRUCK_L * TRUCK_W * TRUCK_H) * 100), stacks: items.length,
+      primaryCust: `${primaryCode} ${primaryName}` + (Object.keys(custCounts).length === 1 ? '' : ` 等${Object.keys(custCounts).length}家`),
+      items: citems, rows: rowsAgg,
+      stops, distanceKm: round1(distKm),
+      caiTotal: caiTotalTruck,
+    },
+    unplaced: Object.values(unplacedAgg),
+  };
+}
+
+function isoDate(d) { return d.toISOString().slice(0, 10); }
+function defaultRange() {
+  // production report: the CSV is already one extraction batch for ONE order-date (unlike the
+  // demo Artifact, which spans a rolling multi-day window) -- default the visible range to
+  // exactly that date so recompute()'s filter doesn't exclude the only data present.
+  return [REPORT_DEFAULTS.dateLabel, REPORT_DEFAULTS.dateLabel];
+}
+function defaultDeliveryDate() {
+  // production's extraction doesn't currently carry a delivery-date (oea101) column per line
+  // (every line's `dd` comes through as null -- see buildStacks) -- defaulting this filter to
+  // "tomorrow" the way the demo Artifact does would exclude every row (null never equals a
+  // specific date string) and the report would load empty. Cleared is the only safe default.
+  return '';
+}
+
+let DATA = null;
 const state = { current: 0 };
+
+// 模擬裝車 mode: user hand-picks a set of delivery customers/orders (instead of letting the
+// automatic planner choose) and sees whether they'd load into ONE truck of the current
+// dimensions/load-mode. SIM_SELECTED holds "custCode||orderNo" keys; SIM_RESULT is the last
+// simulateSingleTruck() output (or null before the first run / after the selection changes).
+let VIEW_MODE = 'auto'; // 'auto' | 'sim'
+let SIM_SELECTED = new Set();
+let SIM_RESULT = null;
+let SIM_FILTER_TEXT = ''; // 模擬裝車 picker's delivery-location search box (customer code or name)
+
+// single source of truth for "which truck should the 3D view / map / table currently show" --
+// every render/interaction handler should go through this instead of reaching into
+// DATA.trucks[state.current] directly, so drag-to-rotate, wheel-zoom and map-pan keep working
+// on whichever truck is actually on screen (auto-mode's selected truck, or the simulated one).
+function currentTruck() {
+  if (VIEW_MODE === 'sim') return SIM_RESULT ? SIM_RESULT.truck : null;
+  return (DATA && DATA.trucks.length) ? DATA.trucks[state.current] : null;
+}
+
+function recompute() {
+  const startEl = document.getElementById('rangeStart');
+  const endEl = document.getElementById('rangeEnd');
+  const deliveryEl = document.getElementById('deliveryFilter');
+  let startISO = startEl.value, endISO = endEl.value;
+  const deliveryISO = deliveryEl.value; // optional — empty means no delivery-date filter
+  const note = document.getElementById('rangeNote');
+  note.textContent = '';
+  if (!startISO || !endISO || startISO > endISO) {
+    note.textContent = '訂單日期區間不正確,已還原預設值';
+    const [ds, de] = defaultRange();
+    startISO = ds; endISO = de;
+    startEl.value = ds; endEl.value = de;
+  }
+  let filtered = currentLines().filter(r => r.od >= startISO && r.od <= endISO);
+  if (deliveryISO) filtered = filtered.filter(r => r.dd === deliveryISO);
+  DATA = computePlan(filtered);
+  if (!DATA.trucks.length) {
+    const deliveryPart = deliveryISO ? `、交期=${deliveryISO}` : '';
+    note.textContent = `所選訂單日期區間(${startISO} ~ ${endISO}${deliveryPart})內沒有已確認訂單資料`;
+  }
+  state.current = 0;
+  buildStatRow();
+  if (VIEW_MODE === 'sim') {
+    buildSimPicker();
+    // a load-mode/overhang/truck-dims/plant/date change invalidates any existing simulation
+    // result -- rerun it automatically so the screen doesn't keep showing a stale packing.
+    if (SIM_SELECTED.size) runSimulation(); else { SIM_RESULT = null; render(); }
+  } else {
+    buildTruckList();
+    render();
+  }
+}
 
 function fmtInt(n) { return Number(n).toLocaleString('en-US'); }
 
@@ -378,6 +2198,7 @@ function buildStatRow() {
     ['訂單數', fmtInt(m.totalOrders)],
     ['送貨客戶數', fmtInt(m.totalCustomers)],
     ['總箱數', fmtInt(m.totalBoxes)],
+    ['總材數', m.totalCai.toLocaleString('en-US', {maximumFractionDigits:0})],
     ['需求車次', fmtInt(m.totalTrucks)],
     ['總配送距離', `${m.totalDistanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km`],
   ];
@@ -385,14 +2206,30 @@ function buildStatRow() {
   row.innerHTML = stats.map(([lbl, num]) =>
     `<div class="stat"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`
   ).join('');
-  document.getElementById('metaDate').textContent = m.date;
-  const d = DATA.truckDims;
-  document.getElementById('metaTruck').textContent = `${d.L}×${d.W}×${d.H}mm`;
+  document.getElementById('metaPlant').textContent = currentPlantLabel();
+  document.getElementById('metaDate').textContent = REPORT_DEFAULTS.dateLabel;
 }
 
 function buildTruckList() {
   const list = document.getElementById('truckList');
+  list.innerHTML = '<div class="list-head">車次列表(依送貨日期 → 裝載率)</div>';
+  if (!DATA.trucks.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-note';
+    empty.style.padding = '4px 16px';
+    empty.textContent = '此區間無車次';
+    list.appendChild(empty);
+    return;
+  }
+  let lastDate = null;
   DATA.trucks.forEach((t, idx) => {
+    if (t.deliveryDate !== lastDate) {
+      lastDate = t.deliveryDate;
+      const head = document.createElement('div');
+      head.textContent = `送貨日 ${t.deliveryDate}`;
+      head.style.cssText = 'padding:10px 16px 4px;font-size:11px;color:var(--accent-2);font-weight:700;letter-spacing:.03em;';
+      list.appendChild(head);
+    }
     const btn = document.createElement('button');
     btn.className = 'truck-item' + (idx === state.current ? ' active' : '');
     btn.dataset.idx = idx;
@@ -415,13 +2252,204 @@ function selectTruck(idx) {
   render();
 }
 
+// same order-date-range + delivery-date-filter the automatic plan (DATA) is currently built
+// from, so every customer/order the picker offers is guaranteed to already have a legend
+// color/index reserved for it in DATA.customers (see simulateSingleTruck's custIndex reuse).
+function simFilteredLines() {
+  const startEl = document.getElementById('rangeStart'), endEl = document.getElementById('rangeEnd');
+  const deliveryEl = document.getElementById('deliveryFilter');
+  let filtered = currentLines().filter(r => r.od >= startEl.value && r.od <= endEl.value);
+  if (deliveryEl.value) filtered = filtered.filter(r => r.dd === deliveryEl.value);
+  return filtered;
+}
+
+function buildSimPicker() {
+  const lines = simFilteredLines();
+  // drop selections that fell out of range (plant/date-range/delivery-filter changed underneath
+  // the picker) so a stale checkbox key can't silently vanish a customer from a later simulation.
+  const validKeys = new Set(lines.map(r => r.cc + '||' + r.o));
+  for (const k of [...SIM_SELECTED]) if (!validKeys.has(k)) SIM_SELECTED.delete(k);
+
+  const list = document.getElementById('truckList');
+  list.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'list-head';
+  head.textContent = '模擬裝車 — 勾選送貨地點/訂單';
+  list.appendChild(head);
+
+  const summary = document.createElement('div');
+  summary.className = 'sim-summary';
+  list.appendChild(summary);
+
+  const actions = document.createElement('div');
+  actions.className = 'sim-actions';
+  const simBtn = document.createElement('button');
+  simBtn.type = 'button'; simBtn.className = 'primary'; simBtn.textContent = '模擬裝車';
+  simBtn.addEventListener('click', runSimulation);
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button'; clearBtn.className = 'secondary'; clearBtn.textContent = '清空';
+  clearBtn.addEventListener('click', () => { SIM_SELECTED.clear(); SIM_RESULT = null; buildSimPicker(); render(); });
+  actions.appendChild(simBtn); actions.appendChild(clearBtn);
+  list.appendChild(actions);
+
+  // delivery-location search box -- lives OUTSIDE the entries container and is never recreated
+  // by renderSimEntries, so typing doesn't lose focus/cursor position the way a full list.innerHTML
+  // rebuild on every keystroke would (checkbox toggles don't need focus preserved, so THEY still
+  // go through the simpler full-rebuild path elsewhere).
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'sim-search';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = '篩選送貨地點(客戶代號或名稱)';
+  searchInput.value = SIM_FILTER_TEXT;
+  searchWrap.appendChild(searchInput);
+  list.appendChild(searchWrap);
+
+  const entries = document.createElement('div');
+  entries.id = 'simEntries';
+  list.appendChild(entries);
+
+  searchInput.addEventListener('input', () => {
+    SIM_FILTER_TEXT = searchInput.value;
+    renderSimEntries(entries, summary, lines);
+  });
+
+  if (!lines.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-note';
+    empty.style.padding = '4px 16px';
+    empty.textContent = '此區間無訂單資料';
+    entries.appendChild(empty);
+    updateSimSummary(summary, []);
+    return;
+  }
+
+  renderSimEntries(entries, summary, lines);
+}
+
+// renders the customer/order checkbox tree into `container`, filtered by SIM_FILTER_TEXT
+// against customer code/name -- split out from buildSimPicker so the search box and checkbox
+// toggles can both refresh just this part without tearing down (and defocusing) the search
+// input itself. `summary` always reflects the TRUE selection across the full `lines` set,
+// never just whatever the search happens to be showing right now.
+function renderSimEntries(container, summary, lines) {
+  container.innerHTML = '';
+  const q = SIM_FILTER_TEXT.trim().toLowerCase();
+
+  const byCust = new Map();
+  for (const r of lines) {
+    if (!byCust.has(r.cc)) byCust.set(r.cc, { name: r.cn, orders: new Map() });
+    const entry = byCust.get(r.cc);
+    if (!entry.orders.has(r.o)) entry.orders.set(r.o, []);
+    entry.orders.get(r.o).push(r);
+  }
+  let custEntries = [...byCust.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  if (q) {
+    custEntries = custEntries.filter(([cc, { name }]) =>
+      cc.toLowerCase().includes(q) || name.toLowerCase().includes(q));
+  }
+
+  if (!custEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-note';
+    empty.style.padding = '4px 16px';
+    empty.textContent = '沒有符合的送貨地點';
+    container.appendChild(empty);
+    updateSimSummary(summary, lines);
+    return;
+  }
+
+  for (const [cc, { name, orders }] of custEntries) {
+    const orderNos = [...orders.keys()];
+    const custRow = document.createElement('label');
+    custRow.className = 'sim-cust';
+    const custCb = document.createElement('input');
+    custCb.type = 'checkbox';
+    const checkedCount = orderNos.filter(o => SIM_SELECTED.has(cc + '||' + o)).length;
+    custCb.checked = checkedCount === orderNos.length;
+    custCb.indeterminate = checkedCount > 0 && checkedCount < orderNos.length;
+    custCb.addEventListener('change', () => {
+      for (const o of orderNos) {
+        const key = cc + '||' + o;
+        if (custCb.checked) SIM_SELECTED.add(key); else SIM_SELECTED.delete(key);
+      }
+      renderSimEntries(container, summary, lines);
+    });
+    custRow.appendChild(custCb);
+    const custLabel = document.createElement('span');
+    custLabel.textContent = `${cc} ${name}`;
+    custRow.appendChild(custLabel);
+    container.appendChild(custRow);
+
+    for (const [orderNo, orderLines] of orders) {
+      const key = cc + '||' + orderNo;
+      const orderRow = document.createElement('label');
+      orderRow.className = 'sim-order';
+      const orderCb = document.createElement('input');
+      orderCb.type = 'checkbox';
+      orderCb.checked = SIM_SELECTED.has(key);
+      orderCb.addEventListener('change', () => {
+        if (orderCb.checked) SIM_SELECTED.add(key); else SIM_SELECTED.delete(key);
+        renderSimEntries(container, summary, lines);
+      });
+      orderRow.appendChild(orderCb);
+      const totalQty = orderLines.reduce((s, r) => s + r.q, 0);
+      const orderLabel = document.createElement('span');
+      orderLabel.textContent = `${orderNo}(${orderLines.length}項、${fmtInt(Math.round(totalQty))}箱)`;
+      orderRow.appendChild(orderLabel);
+      container.appendChild(orderRow);
+    }
+  }
+
+  updateSimSummary(summary, lines);
+}
+
+function updateSimSummary(summary, lines) {
+  const selLines = lines.filter(r => SIM_SELECTED.has(r.cc + '||' + r.o));
+  const selOrders = new Set(selLines.map(r => r.cc + '||' + r.o));
+  const selCusts = new Set(selLines.map(r => r.cc));
+  const selBoxes = selLines.reduce((s, r) => s + r.q, 0);
+  summary.innerHTML = `已選 <strong>${selCusts.size}</strong> 家送貨地點、<strong>${selOrders.size}</strong> 張訂單、<strong>${fmtInt(Math.round(selBoxes))}</strong> 箱`;
+}
+
+function runSimulation() {
+  const lines = simFilteredLines();
+  const selLines = lines.filter(r => SIM_SELECTED.has(r.cc + '||' + r.o));
+  SIM_RESULT = selLines.length ? simulateSingleTruck(selLines) : null;
+  render();
+}
+
 function render() {
+  if (VIEW_MODE === 'sim') { renderSimView(); return; }
+  renderAutoView();
+}
+
+function clearViewport() {
+  document.getElementById('truckTitle').textContent = '—';
+  document.getElementById('truckCust').textContent = '';
+  document.getElementById('utilPill').textContent = '裝載率 —';
+  document.getElementById('caiPill').textContent = '材數 —';
+  document.getElementById('legend').innerHTML = '';
+  document.getElementById('dispatchBody').innerHTML = '';
+  document.getElementById('dispatchFoot').innerHTML = '';
+  document.getElementById('mapStats').innerHTML = '';
+  const mapStops = document.querySelector('.map-stops'); if (mapStops) mapStops.remove();
+  const simCtx = document.getElementById('sim').getContext('2d');
+  simCtx.clearRect(0, 0, 99999, 99999);
+  const mapCtx = document.getElementById('mapCanvas').getContext('2d');
+  mapCtx.clearRect(0, 0, 99999, 99999);
+}
+
+function renderAutoView() {
+  renderSimOverflowNote(null);
+  if (!DATA.trucks.length) { clearViewport(); return; }
   const t = DATA.trucks[state.current];
   document.getElementById('truckTitle').textContent = `車次 ${t.n}`;
-  document.getElementById('truckCust').textContent = `送貨客戶:${t.primaryCust}`;
+  document.getElementById('truckCust').textContent = `送貨日 ${t.deliveryDate} · 送貨客戶:${t.primaryCust}`;
   const pill = document.getElementById('utilPill');
   pill.textContent = `裝載率 ${t.util}%`;
   pill.className = 'util-pill ' + (t.util >= 75 ? 'good' : (t.util < 50 ? 'warn' : ''));
+  document.getElementById('caiPill').textContent = `材數 ${t.caiTotal.toLocaleString('en-US', {maximumFractionDigits:1})}`;
 
   renderLegend(t);
   renderCanvas(t);
@@ -429,21 +2457,112 @@ function render() {
   renderTable(t);
 }
 
+function renderSimView() {
+  if (!SIM_RESULT || !SIM_RESULT.truck.items.length) {
+    clearViewport();
+    document.getElementById('truckTitle').textContent = '模擬裝車';
+    document.getElementById('truckCust').textContent = '請在左側勾選送貨地點/訂單,再按「模擬裝車」';
+    renderSimOverflowNote(null);
+    return;
+  }
+  const t = SIM_RESULT.truck;
+  document.getElementById('truckTitle').textContent = '模擬裝車';
+  document.getElementById('truckCust').textContent =
+    `送貨客戶:${t.primaryCust} · ${LOAD_MODE === 'manual' ? '手工疊車' : '棧板疊車'}`;
+  const pill = document.getElementById('utilPill');
+  pill.textContent = `裝載率 ${t.util}%`;
+  pill.className = 'util-pill ' + (t.util >= 75 ? 'good' : (t.util < 50 ? 'warn' : ''));
+  document.getElementById('caiPill').textContent = `材數 ${t.caiTotal.toLocaleString('en-US', {maximumFractionDigits:1})}`;
+
+  renderLegend(t);
+  renderCanvas(t);
+  renderMap(t);
+  renderTable(t);
+  renderSimOverflowNote(SIM_RESULT.unplaced);
+}
+
+function renderSimOverflowNote(unplaced) {
+  const el = document.getElementById('simOverflow');
+  if (!unplaced || !unplaced.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const totalBoxes = unplaced.reduce((s, u) => s + u.boxes, 0);
+  el.style.display = 'block';
+  el.innerHTML = `<strong>⚠ 這台車裝不下,以下 ${unplaced.length} 筆品項、共 ${fmtInt(Math.round(totalBoxes))} 箱未能排入:</strong>` +
+    `<ul>${unplaced.map(u => `<li>${u.custCode} ${u.custName} · 訂單 ${u.orderNo} · 品號 ${u.itemCode} · ${fmtInt(Math.round(u.boxes))}箱</li>`).join('')}</ul>`;
+}
+
 function renderMapStats(t) {
   const el = document.getElementById('mapStats');
   const n = t.stops.length;
   el.innerHTML = `
-    <div class="stat2"><div class="num">${t.distanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km</div><div class="lbl">送貨距離(依站序實際路網距離)</div></div>
+    <div class="stat2"><div class="num">${t.distanceKm.toLocaleString('en-US', {maximumFractionDigits:1})} km</div><div class="lbl">送貨距離(由廠區出發,依站序實際路網距離)</div></div>
     <div class="stat2"><div class="num">${n}</div><div class="lbl">送貨站數</div></div>
   `;
+  const plant = currentPlantPoint();
   const stopsEl = document.createElement('div');
   stopsEl.className = 'map-stops';
-  stopsEl.innerHTML = t.stops.map((s, i) =>
-    `<span class="stop-chip"><span class="n">${i + 1}</span>${s.name}</span>`
-  ).join('');
+  stopsEl.innerHTML =
+    `<span class="stop-chip"><span class="n" style="background:var(--accent);">廠</span>${plant.name}出發</span>` +
+    t.stops.map((s, i) =>
+      `<span class="stop-chip"><span class="n">${i + 1}</span>${s.name}</span>`
+    ).join('');
   const existing = el.parentElement.querySelector('.map-stops');
   if (existing) existing.remove();
   el.parentElement.appendChild(stopsEl);
+}
+
+function mercY(latDeg) {
+  const rad = latDeg * Math.PI / 180;
+  return Math.log(Math.tan(Math.PI / 4 + rad / 2));
+}
+
+// project lng/lat to a pixel position within the source MAP_BG_SRC image
+function lngLatToImagePx(lng, lat) {
+  const b = MAP_IMG_BOUNDS;
+  const px = (lng - b.west) / (b.east - b.west) * MAP_IMG_W;
+  const my0 = mercY(b.north), my1 = mercY(b.south);
+  const py = (my0 - mercY(lat)) / (my0 - my1) * MAP_IMG_H;
+  return [px, py];
+}
+
+// pan/zoom camera state for the route map: cx/cy are the source-image pixel
+// coords centred in the canvas; scale is CSS px per source-image px.
+let mapCamera = { scale: 1, cx: 0, cy: 0, key: null };
+let mapRenderState = null; // last render's {scale, destX0, destY0, cssW, cssH} for hit-testing/interaction
+const MAP_MIN_SCALE = 0.4, MAP_MAX_SCALE = 40;
+
+function naturalMapCamera(cssW, cssH) {
+  const pts = DATA.allCustPoints;
+  const plant = currentPlantPoint();
+  const lats = pts.map(p => p.lat).concat([plant.lat]);
+  const lngs = pts.map(p => p.lng).concat([plant.lng]);
+  const pad = 0.06;
+  const minLat = Math.min(...lats) - pad, maxLat = Math.max(...lats) + pad;
+  const minLng = Math.min(...lngs) - pad, maxLng = Math.max(...lngs) + pad;
+  const [sx0, sy0] = lngLatToImagePx(minLng, maxLat);
+  const [sx1, sy1] = lngLatToImagePx(maxLng, minLat);
+  const sx = Math.max(0, sx0), sy = Math.max(0, sy0);
+  const sw = Math.min(MAP_IMG_W, sx1) - sx, sh = Math.min(MAP_IMG_H, sy1) - sy;
+  const scale = Math.min(cssW / sw, cssH / sh);
+  return { scale, cx: sx + sw / 2, cy: sy + sh / 2 };
+}
+
+function resetMapView() {
+  mapCamera.key = null;
+  const ct = currentTruck();
+  if (ct) renderMap(ct);
+}
+
+function zoomMapBy(factor, cssX, cssY) {
+  if (!mapRenderState) return;
+  const { scale, destX0, destY0, cssW, cssH } = mapRenderState;
+  const mx = cssX ?? cssW / 2, my = cssY ?? cssH / 2;
+  const imgX = (mx - destX0) / scale, imgY = (my - destY0) / scale;
+  const newScale = Math.min(MAP_MAX_SCALE, Math.max(MAP_MIN_SCALE, scale * factor));
+  mapCamera.cx = imgX + (cssW / 2 - mx) / newScale;
+  mapCamera.cy = imgY + (cssH / 2 - my) / newScale;
+  mapCamera.scale = newScale;
+  const ct = currentTruck();
+  if (ct) renderMap(ct);
 }
 
 function renderMap(t) {
@@ -460,68 +2579,95 @@ function renderMap(t) {
   ctx.clearRect(0, 0, cssW, cssH);
 
   const dark = isDark();
-  const dim = dark ? 'rgba(231,228,220,0.22)' : 'rgba(35,38,42,0.18)';
-  const gridColor = dark ? '#2a3036' : '#e4e0d4';
-  const routeColor = dark ? '#c89a66' : '#b98a55';
+  const dim = dark ? 'rgba(20,24,28,0.55)' : 'rgba(255,255,255,0.5)';
+  const routeColor = dark ? '#c89a66' : '#a86f38';
 
   const pts = DATA.allCustPoints;
-  if (!pts.length) return;
-  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
-  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
-  const margin = 26;
-  const spanLat = Math.max(maxLat - minLat, 0.001), spanLng = Math.max(maxLng - minLng, 0.001);
-  const scale = Math.min((cssW - margin*2) / spanLng, (cssH - margin*2) / spanLat);
-  const offX = margin + ((cssW - margin*2) - spanLng*scale) / 2;
-  const offY = margin + ((cssH - margin*2) - spanLat*scale) / 2;
+  if (!pts.length) { mapRenderState = null; return; }
+  const plant = currentPlantPoint();
 
-  function toXY(lat, lng) {
-    const x = (lng - minLng) * scale + offX;
-    const y = (maxLat - lat) * scale + offY; // north = up
-    return [x, y];
+  const key = t.n + '|' + CURRENT_PLANT;
+  if (mapCamera.key !== key) {
+    mapCamera = { ...naturalMapCamera(cssW, cssH), key };
+  }
+  const { scale, cx, cy } = mapCamera;
+  const destX0 = cssW / 2 - cx * scale, destY0 = cssH / 2 - cy * scale;
+  mapRenderState = { scale, destX0, destY0, cssW, cssH };
+
+  if (mapImg && mapImg.complete && mapImg.naturalWidth) {
+    ctx.drawImage(mapImg, destX0, destY0, MAP_IMG_W * scale, MAP_IMG_H * scale);
+    ctx.fillStyle = dim;
+    ctx.fillRect(0, 0, cssW, cssH);
+  } else {
+    ctx.fillStyle = dark ? '#1c2126' : '#e9e4d8';
+    ctx.fillRect(0, 0, cssW, cssH);
   }
 
-  // faint reference grid
-  ctx.strokeStyle = gridColor;
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const gy = margin + (cssH - margin*2) * i / 4;
-    ctx.beginPath(); ctx.moveTo(margin, gy); ctx.lineTo(cssW - margin, gy); ctx.stroke();
+  function toXY(lat, lng) {
+    const [ipx, ipy] = lngLatToImagePx(lng, lat);
+    return [ipx * scale + destX0, ipy * scale + destY0];
   }
 
   // all customers, faint
   pts.forEach(p => {
     const [x, y] = toXY(p.lat, p.lng);
     ctx.beginPath();
-    ctx.arc(x, y, 2.4, 0, Math.PI * 2);
-    ctx.fillStyle = dim;
+    ctx.arc(x, y, 2.6, 0, Math.PI * 2);
+    ctx.fillStyle = dark ? 'rgba(231,228,220,0.55)' : 'rgba(35,38,42,0.4)';
     ctx.fill();
   });
 
-  // this truck's route, highlighted + connected in stop order
+  // this truck's route: plant depot first, then stops in delivery order
+  const plantXY = toXY(plant.lat, plant.lng);
   const stopXY = t.stops.map(s => toXY(s.lat, s.lng));
-  if (stopXY.length > 1) {
+  const routeXY = [plantXY, ...stopXY];
+  if (routeXY.length > 1) {
     ctx.beginPath();
-    stopXY.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+    routeXY.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
     ctx.strokeStyle = routeColor;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([]);
+    ctx.lineWidth = 2.25;
     ctx.stroke();
   }
   stopXY.forEach(([x, y], i) => {
     ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
     ctx.fillStyle = routeColor;
     ctx.fill();
     ctx.strokeStyle = dark ? '#14181c' : '#fff';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.75;
     ctx.stroke();
-    ctx.fillStyle = dark ? '#14181c' : '#fff';
-    ctx.font = '9px var(--font-mono)';
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 10px var(--font-mono)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(i + 1), x, y + 0.5);
   });
+
+  // plant depot marker: square, accent colour, labelled 廠
+  {
+    const [px, py] = plantXY;
+    const s = 9;
+    const accent = dark ? '#6fb0c8' : '#2e5f73';
+    ctx.beginPath();
+    ctx.rect(px - s, py - s, s * 2, s * 2);
+    ctx.fillStyle = accent;
+    ctx.fill();
+    ctx.strokeStyle = dark ? '#14181c' : '#fff';
+    ctx.lineWidth = 1.75;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 11px var(--font-body)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('廠', px, py + 0.5);
+  }
+
+  // attribution (required by OpenStreetMap tile usage terms)
+  ctx.font = '10px var(--font-body)';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = dark ? 'rgba(231,228,220,0.65)' : 'rgba(35,38,42,0.6)';
+  ctx.fillText(MAP_ATTRIBUTION, cssW - 6, cssH - 5);
 }
 
 function renderLegend(t) {
@@ -534,17 +2680,23 @@ function renderLegend(t) {
   }).join('');
 }
 
-// ---- Excel export (whole day's dispatch sheet, all trucks) ----
+// ---- Excel export (all trucks currently on screen, i.e. the full plan for the current
+// plant/date-range/delivery-filter/load-mode/slider settings) ----
 // Ships as an HTML table wrapped in an Excel-recognized MIME/namespace shell rather than a
-// real .xlsx binary, since this report is a single static file with no bundled libraries --
-// Excel opens this directly with correct cell typing (numbers stay numeric) and no warnings
-// as long as the extension is .xls, not .xlsx.
+// real .xlsx binary, since this is a single self-contained artifact with no bundled
+// libraries and no network access -- Excel opens this directly with correct cell typing
+// (numbers stay numeric) and no warnings as long as the extension is .xls, not .xlsx.
 function exportDispatchExcel() {
-  const header = ['車次', '送貨客戶代號', '送貨客戶名稱', '訂單號', '品號', '箱數', '寬mm', '長mm', '厚mm', '堆疊數'];
+  if (!DATA || !DATA.trucks.length) return;
+  const header = ['車次', '疊車順序', '送貨客戶', '訂單號', '品號', '楞別', '單位', '箱數', '箱寬mm', '箱長mm', '厚mm', '單位尺寸mm', '堆數', '堆疊高度mm', '單位總高mm', '材數/箱', '材數合計'];
   const rows = [];
   DATA.trucks.forEach(t => {
     t.rows.forEach(r => {
-      rows.push([`車次${t.n}`, r.cust_code, r.cust_name, r.order_no, r.item, r.boxes, r.w, r.l, r.t, r.stacks]);
+      rows.push([
+        `車次${t.n}`, r.seq, `${r.cust_code} ${r.cust_name}`, r.order_no, r.item, r.flute || '—', r.unit,
+        r.boxes, r.w, r.l, r.t, `${r.palletW}×${r.palletL}`, r.pallets, r.stackH, r.palletTotalH,
+        r.caiPerBox, Math.round(r.caiTotal * 100) / 100,
+      ]);
     });
   });
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -559,38 +2711,102 @@ function exportDispatchExcel() {
   const blob = new Blob(['﻿' + html], { type: 'application/vnd.ms-excel' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
+  const startISO = document.getElementById('rangeStart').value;
+  const endISO = document.getElementById('rangeEnd').value;
   a.href = url;
-  a.download = `排車明細_${DATA.meta.date}.xls`;
+  a.download = `排車明細_${currentPlantLabel()}_${startISO}~${endISO}.xls`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-document.getElementById('exportExcelBtn').addEventListener('click', exportDispatchExcel);
+
+// ---- whole-tool download (single standalone HTML file) ----
+// Serializes the live DOM rather than re-fetching the original source, so this always
+// matches what's actually on screen. The embedded RAW_LINES_BY_PLANT data and every script
+// tag are already part of the page, so the downloaded file is fully self-contained and works
+// offline with no claude.ai access -- exactly like opening this page fresh, just from disk.
+// Runtime-only state (which truck is selected, slider drag position, 3D camera angle) isn't
+// part of the DOM and so isn't preserved; the reopened copy starts at the same defaults this
+// page started at, same as visiting the artifact link again.
+function downloadStandaloneTool() {
+  const html = '<!doctype html>\n' + document.documentElement.outerHTML;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `排車單與3D裝載模擬_${isoDate(new Date())}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function renderTable(t) {
   const body = document.getElementById('dispatchBody');
-  const rows = [...t.rows].sort((a, b) => a.cust_code.localeCompare(b.cust_code) || b.boxes - a.boxes);
+  // t.rows already comes out of computePlan in loading order (r.seq) -- don't re-sort here,
+  // the whole point of 疊車順序 is that the sheet reads in the same order the truck is packed.
+  const rows = t.rows;
   body.innerHTML = rows.map(r => `
     <tr>
+      <td class="num">${r.seq}</td>
       <td>${r.cust_code} ${r.cust_name}</td>
       <td>${r.order_no}</td>
       <td>${r.item}</td>
+      <td>${r.flute || '—'}</td>
+      <td>${r.unit}</td>
       <td class="num">${fmtInt(r.boxes)}</td>
       <td class="num">${r.w}</td>
       <td class="num">${r.l}</td>
       <td class="num">${r.t}</td>
-      <td class="num">${r.stacks}</td>
+      <td>${r.palletW}×${r.palletL}</td>
+      <td class="num">${r.pallets}</td>
+      <td class="num">${r.stackH}</td>
+      <td class="num">${r.palletTotalH}</td>
+      <td class="num">${r.caiPerBox}</td>
+      <td class="num">${r.caiTotal.toLocaleString('en-US', {maximumFractionDigits:2})}</td>
     </tr>
   `).join('');
+  const foot = document.getElementById('dispatchFoot');
+  if (foot) {
+    const sumCai = rows.reduce((s, r) => s + r.caiTotal, 0);
+    const sumBoxes = rows.reduce((s, r) => s + r.boxes, 0);
+    const sumPallets = rows.reduce((s, r) => s + r.pallets, 0);
+    foot.innerHTML = `
+      <tr>
+        <td colspan="6">車次${t.n} 合計</td>
+        <td class="num">${fmtInt(sumBoxes)}</td>
+        <td colspan="2"></td>
+        <td></td>
+        <td></td>
+        <td class="num">${sumPallets}</td>
+        <td></td>
+        <td></td>
+        <td class="num"></td>
+        <td class="num">${sumCai.toLocaleString('en-US', {maximumFractionDigits:2})}</td>
+      </tr>
+    `;
+  }
 }
 
 // ---- Isometric truck + stack renderer ----
+// camYaw = 0 reproduces the exact original fixed-angle look; dragging the canvas spins the
+// model around its vertical axis by adjusting this. camZoom scales the auto-fit view; the
+// scroll wheel adjusts it. Both persist across re-renders (recompute, truck switch, theme
+// change) until the user resets them, same as the route map's pan/zoom state.
+let camYaw = 0;
+let camZoom = 1;
+
+function rotateXZ(x, z) {
+  const cosR = Math.cos(camYaw), sinR = Math.sin(camYaw);
+  return [x * cosR - z * sinR, x * sinR + z * cosR];
+}
 function project(x, y, z) {
   // x: along length (0..L), y: height (0..H), z: along width (0..W)
+  const [rx, rz] = rotateXZ(x, z);
   const cos30 = Math.cos(Math.PI / 6), sin30 = Math.sin(Math.PI / 6);
-  const sx = (x - z) * cos30;
-  const sy = (x + z) * sin30 - y;
+  const sx = (rx - rz) * cos30;
+  const sy = (rx + rz) * sin30 - y;
   return [sx, sy];
 }
 
@@ -621,7 +2837,8 @@ function renderCanvas(t) {
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const margin = 36;
-  const scale = Math.min((cssW - margin*2) / (maxX - minX), (cssH - margin*2) / (maxY - minY));
+  const fitScale = Math.min((cssW - margin*2) / (maxX - minX), (cssH - margin*2) / (maxY - minY));
+  const scale = fitScale * camZoom;
   const offX = margin - minX*scale + ((cssW - margin*2) - (maxX-minX)*scale)/2;
   const offY = margin - minY*scale + ((cssH - margin*2) - (maxY-minY)*scale)/2;
 
@@ -641,26 +2858,49 @@ function renderCanvas(t) {
   // draw truck floor (wireframe) first
   poly([P(0,0,0), P(L,0,0), P(L,0,W), P(0,0,W)], null, lineColor);
 
-  // sort items back-to-front for painter's algorithm (by x+z ascending, then y)
+  // sort items back-to-front for painter's algorithm, by rotated depth ascending -- has to
+  // track camYaw (via rotateXZ) or the draw order goes wrong the moment the view is spun,
+  // since "further from camera" no longer means "larger x+z" once the model is rotated.
   const items = [...t.items].sort((a, b) => {
-    const da = (a.x + a.dx/2) + (a.y + a.dy/2);
-    const db = (b.x + b.dx/2) + (b.y + b.dy/2);
+    const [, da] = rotateXZ(a.x + a.dx/2, a.y + a.dy/2);
+    const [, db] = rotateXZ(b.x + b.dx/2, b.y + b.dy/2);
     return da - db;
   });
 
+  const palletColor = dark ? '#8a6238' : '#a0784a';
   items.forEach(it => {
     const color = paletteColor(it.c, DATA.customers.length, dark);
     const x0 = it.x, x1 = it.x + it.dx;
     const z0 = it.y, z1 = it.y + it.dy; // note: item.y is truck-width axis (z)
-    const y0 = it.y0 || 0; // manual-mode on-top stacking: height this item's own base sits at
+    // y0 = this item's own floor: 0 normally, or another item's height if it's stacked on
+    // top of it (手工疊車 space-saving) -- the pallet block (if any) and cargo both sit
+    // above y0, not above absolute 0, so a topped item doesn't draw a phantom wood block
+    // reaching all the way down through the item it's resting on.
+    const y0 = it.y0 || 0;
+    const yBase = y0 + Math.min(it.baseH ?? 0, it.h);
     const y1 = y0 + it.h;
 
-    // top face
+    if (yBase > y0) {
+      // pallet base block (wood tone)
+      poly([P(x0,yBase,z0), P(x1,yBase,z0), P(x1,yBase,z1), P(x0,yBase,z1)], palletColor, dark ? '#000' : '#0002', 1);
+      poly([P(x0,y0,z0), P(x1,y0,z0), P(x1,yBase,z0), P(x0,yBase,z0)], shade(palletColor, 0.78), dark ? '#000' : '#0002');
+      poly([P(x1,y0,z0), P(x1,y0,z1), P(x1,yBase,z1), P(x1,yBase,z0)], shade(palletColor, 0.6), dark ? '#000' : '#0002');
+    }
+    // goods on top of the pallet, in customer colour
     poly([P(x0,y1,z0), P(x1,y1,z0), P(x1,y1,z1), P(x0,y1,z1)], color, dark ? '#000' : '#0002', 1);
-    // front face (z0 side)
-    poly([P(x0,y0,z0), P(x1,y0,z0), P(x1,y1,z0), P(x0,y1,z0)], shade(color, 0.78), dark ? '#000' : '#0002');
-    // side face (x1 side)
-    poly([P(x1,y0,z0), P(x1,y0,z1), P(x1,y1,z1), P(x1,y1,z0)], shade(color, 0.6), dark ? '#000' : '#0002');
+    poly([P(x0,yBase,z0), P(x1,yBase,z0), P(x1,y1,z0), P(x0,y1,z0)], shade(color, 0.78), dark ? '#000' : '#0002');
+    poly([P(x1,yBase,z0), P(x1,yBase,z1), P(x1,y1,z1), P(x1,y1,z0)], shade(color, 0.6), dark ? '#000' : '#0002');
+
+    // 疊車順序 label on the top face -- same number as this stack's dispatch-sheet row,
+    // so the two views can be checked against each other directly instead of by eye alone.
+    const [lx, ly] = P((x0 + x1) / 2, y1, (z0 + z1) / 2);
+    ctx.font = 'bold 9px "Noto Sans TC", "Microsoft JhengHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.strokeText(it.seq, lx, ly + 3);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(it.seq, lx, ly + 3);
   });
 
   // truck wireframe edges (front pillars + top outline) drawn last for clarity
@@ -675,6 +2915,21 @@ function renderCanvas(t) {
     ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
   });
 
+  // 車頭 (front/cab end, x=0 -- where the last-delivered customer's load sits, packed
+  // deepest) and 車尾 (rear/door end, x=L -- where the first-delivered customer's load
+  // sits, nearest the door) -- see the repack step in computePlan.
+  const axisDir = project(1, 0, 0);
+  const axisLen = Math.hypot(axisDir[0], axisDir[1]) || 1;
+  const nx = axisDir[0] / axisLen, ny = axisDir[1] / axisLen;
+  const NUDGE = 24;
+  ctx.fillStyle = ink;
+  ctx.font = 'bold 12px "Noto Sans TC", "Microsoft JhengHei", sans-serif';
+  ctx.textAlign = 'center';
+  const headP = P(0, 0, W / 2);
+  ctx.fillText('車頭', headP[0] - nx * NUDGE, headP[1] - ny * NUDGE + 4);
+  const tailP = P(L, 0, W / 2);
+  ctx.fillText('車尾', tailP[0] + nx * NUDGE, tailP[1] + ny * NUDGE + 4);
+
   canvas._items = items;
   canvas._P = P;
 }
@@ -686,9 +2941,41 @@ function shade(hsl, factor) {
   return `hsl(${h} ${s}% ${(parseFloat(l) * factor).toFixed(1)}%)`;
 }
 
-// hover tooltip
+// hover tooltip + drag-to-rotate + wheel-to-zoom
 const tooltip = document.getElementById('tooltip');
-document.getElementById('sim').addEventListener('mousemove', (e) => {
+const simCanvas = document.getElementById('sim');
+simCanvas.style.cursor = 'grab';
+let simDragging = false, simDragStartX = 0, simDragStartYaw = 0, simDragMoved = false;
+
+simCanvas.addEventListener('mousedown', (e) => {
+  simDragging = true; simDragMoved = false;
+  simDragStartX = e.clientX; simDragStartYaw = camYaw;
+  simCanvas.style.cursor = 'grabbing';
+  tooltip.classList.remove('show');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!simDragging) return;
+  const dx = e.clientX - simDragStartX;
+  if (Math.abs(dx) > 2) simDragMoved = true; // small moves still count as a click, not a drag
+  camYaw = simDragStartYaw + dx * 0.008;
+  const ct1 = currentTruck();
+  if (ct1) renderCanvas(ct1);
+});
+window.addEventListener('mouseup', () => {
+  if (!simDragging) return;
+  simDragging = false;
+  simCanvas.style.cursor = 'grab';
+});
+simCanvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0012);
+  camZoom = Math.min(4, Math.max(0.4, camZoom * factor));
+  const ct2 = currentTruck();
+  if (ct2) renderCanvas(ct2);
+}, { passive: false });
+
+simCanvas.addEventListener('mousemove', (e) => {
+  if (simDragging) return; // rotating -- tooltip would just flicker under the cursor
   const canvas = e.target;
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
@@ -697,8 +2984,7 @@ document.getElementById('sim').addEventListener('mousemove', (e) => {
   // hit-test top faces roughly via bounding polygon of projected top face
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    const x0 = it.x, x1 = it.x + it.dx, z0 = it.y, z1 = it.y + it.dy;
-    const y0 = it.y0 || 0, y1 = y0 + it.h;
+    const x0 = it.x, x1 = it.x + it.dx, z0 = it.y, z1 = it.y + it.dy, y0 = it.y0 || 0, y1 = y0 + it.h;
     const pts = [canvas._P(x0,y1,z0), canvas._P(x1,y1,z0), canvas._P(x1,y1,z1), canvas._P(x0,y1,z1),
                  canvas._P(x0,y0,z0)];
     const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
@@ -707,7 +2993,7 @@ document.getElementById('sim').addEventListener('mousemove', (e) => {
     }
   }
   if (hit) {
-    tooltip.innerHTML = `訂單 ${hit.o}<br>品號 ${hit.it}<br>本堆 ${hit.b} 箱`;
+    tooltip.innerHTML = `疊車順序 #${hit.seq}<br>訂單 ${hit.o}<br>品號 ${hit.it}<br>楞別 ${hit.fl || '—'}<br>本堆 ${hit.b} 箱`;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top = (e.clientY + 14) + 'px';
     tooltip.classList.add('show');
@@ -715,12 +3001,171 @@ document.getElementById('sim').addEventListener('mousemove', (e) => {
     tooltip.classList.remove('show');
   }
 });
-document.getElementById('sim').addEventListener('mouseleave', () => tooltip.classList.remove('show'));
+simCanvas.addEventListener('mouseleave', () => { if (!simDragging) tooltip.classList.remove('show'); });
+simCanvas.addEventListener('dblclick', () => {
+  camYaw = 0; camZoom = 1;
+  const ct3 = currentTruck();
+  if (ct3) renderCanvas(ct3);
+});
 
-window.addEventListener('resize', () => render());
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());
+window.addEventListener('resize', () => { if (DATA) render(); });
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (DATA) render(); });
 
-buildStatRow();
-buildTruckList();
-render();
+const [defStart, defEnd] = defaultRange();
+document.getElementById('rangeStart').value = defStart;
+document.getElementById('rangeEnd').value = defEnd;
+document.getElementById('deliveryFilter').value = defaultDeliveryDate();
+document.getElementById('truckLInput').value = REPORT_DEFAULTS.truckL;
+document.getElementById('truckWInput').value = REPORT_DEFAULTS.truckW;
+document.getElementById('truckHInput').value = REPORT_DEFAULTS.truckH;
+setLoadMode(REPORT_DEFAULTS.loadMode);
+document.getElementById('rangeStart').addEventListener('change', recompute);
+document.getElementById('rangeEnd').addEventListener('change', recompute);
+document.getElementById('deliveryFilter').addEventListener('change', recompute);
+document.getElementById('exportExcelBtn').addEventListener('click', exportDispatchExcel);
+document.getElementById('downloadToolBtn').addEventListener('click', downloadStandaloneTool);
+document.getElementById('deliveryClear').addEventListener('click', () => {
+  document.getElementById('deliveryFilter').value = '';
+  recompute();
+});
+// truck cargo-compartment interior dimensions (車廂內徑) -- freely adjustable so the plan can
+// be re-run against a different truck than the default without editing the page source.
+// Ignores empty/zero/negative input rather than recomputing against a broken truck size --
+// the field just keeps its last valid value until the user fixes it.
+function updateTruckDims() {
+  const l = Number(document.getElementById('truckLInput').value);
+  const w = Number(document.getElementById('truckWInput').value);
+  const h = Number(document.getElementById('truckHInput').value);
+  if (!(l > 0 && w > 0 && h > 0)) return;
+  TRUCK_L = l; TRUCK_W = w; TRUCK_H = h;
+  recompute();
+}
+document.getElementById('truckLInput').addEventListener('change', updateTruckDims);
+document.getElementById('truckWInput').addEventListener('change', updateTruckDims);
+document.getElementById('truckHInput').addEventListener('change', updateTruckDims);
+document.getElementById('rangeReset').addEventListener('click', () => {
+  const [ds, de] = defaultRange();
+  document.getElementById('rangeStart').value = ds;
+  document.getElementById('rangeEnd').value = de;
+  document.getElementById('deliveryFilter').value = defaultDeliveryDate();
+  document.getElementById('truckLInput').value = REPORT_DEFAULTS.truckL;
+  document.getElementById('truckWInput').value = REPORT_DEFAULTS.truckW;
+  document.getElementById('truckHInput').value = REPORT_DEFAULTS.truckH;
+  TRUCK_L = REPORT_DEFAULTS.truckL; TRUCK_W = REPORT_DEFAULTS.truckW; TRUCK_H = REPORT_DEFAULTS.truckH;
+  document.getElementById('overhangW').value = 50;
+  document.getElementById('overhangL').value = 300;
+  PALLET_OVERHANG_W = 50; PALLET_OVERHANG_L = 300;
+  document.getElementById('overhangWVal').textContent = '50mm';
+  document.getElementById('overhangLVal').textContent = '300mm';
+  document.getElementById('maxCustPerTruck').value = 3;
+  MAX_CUSTOMERS_PER_TRUCK = 3;
+  document.getElementById('maxCustPerTruckVal').textContent = '3';
+  document.getElementById('dirExemptKm').value = 15;
+  DIRECTION_EXEMPT_RADIUS_KM = 15;
+  document.getElementById('dirExemptKmVal').textContent = '15km';
+  setLoadMode('pallet');
+  recompute();
+});
+document.getElementById('overhangW').addEventListener('input', (e) => {
+  PALLET_OVERHANG_W = Number(e.target.value);
+  document.getElementById('overhangWVal').textContent = PALLET_OVERHANG_W + 'mm';
+  recompute();
+});
+document.getElementById('overhangL').addEventListener('input', (e) => {
+  PALLET_OVERHANG_L = Number(e.target.value);
+  document.getElementById('overhangLVal').textContent = PALLET_OVERHANG_L + 'mm';
+  recompute();
+});
+document.getElementById('maxCustPerTruck').addEventListener('input', (e) => {
+  MAX_CUSTOMERS_PER_TRUCK = Number(e.target.value);
+  document.getElementById('maxCustPerTruckVal').textContent = String(MAX_CUSTOMERS_PER_TRUCK);
+  recompute();
+});
+document.getElementById('dirExemptKm').addEventListener('input', (e) => {
+  DIRECTION_EXEMPT_RADIUS_KM = Number(e.target.value);
+  document.getElementById('dirExemptKmVal').textContent = DIRECTION_EXEMPT_RADIUS_KM + 'km';
+  recompute();
+});
+
+function setLoadMode(mode) {
+  LOAD_MODE = mode;
+  document.querySelectorAll('#loadModeToggle button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  const manual = mode === 'manual';
+  document.getElementById('overhangWLabel').classList.toggle('disabled', manual);
+  document.getElementById('overhangLLabel').classList.toggle('disabled', manual);
+}
+document.querySelectorAll('#loadModeToggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (LOAD_MODE === btn.dataset.mode) return;
+    setLoadMode(btn.dataset.mode);
+    recompute();
+  });
+});
+
+function setViewMode(mode) {
+  VIEW_MODE = mode;
+  document.querySelectorAll('#viewModeToggle button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  // 車次最大客戶數 / 方向限制豁免距離 only affect the automatic multi-customer clustering
+  // (packStacksIntoTrucks) -- 模擬裝車 never runs that pass (it packs exactly the customers
+  // the user checked into one truck), so grey those two controls out to avoid implying they'd
+  // do anything here.
+  const sim = mode === 'sim';
+  document.getElementById('maxCustPerTruckLabel').classList.toggle('disabled', sim);
+  document.getElementById('dirExemptKmLabel').classList.toggle('disabled', sim);
+  state.current = 0;
+  if (sim) buildSimPicker(); else buildTruckList();
+  render();
+}
+document.querySelectorAll('#viewModeToggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (VIEW_MODE === btn.dataset.mode) return;
+    setViewMode(btn.dataset.mode);
+  });
+});
+
+const plantSelect = document.getElementById('plantSelect');
+plantSelect.innerHTML = PLANT_ORDER.filter(code => RAW_LINES_BY_PLANT[code]).map(code =>
+  `<option value="${code}">${RAW_LINES_BY_PLANT[code].label}</option>`
+).join('');
+plantSelect.value = CURRENT_PLANT;
+plantSelect.addEventListener('change', (e) => {
+  CURRENT_PLANT = e.target.value;
+  recompute();
+});
+
+// ---- map pan/zoom interaction ----
+(() => {
+  const mapCanvas = document.getElementById('mapCanvas');
+  mapCanvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = mapCanvas.getBoundingClientRect();
+    zoomMapBy(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+
+  let dragging = false, dragStartX = 0, dragStartY = 0, camStartCx = 0, camStartCy = 0;
+  mapCanvas.addEventListener('pointerdown', (e) => {
+    if (!mapRenderState) return;
+    dragging = true;
+    mapCanvas.setPointerCapture(e.pointerId);
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    camStartCx = mapCamera.cx; camStartCy = mapCamera.cy;
+  });
+  mapCanvas.addEventListener('pointermove', (e) => {
+    if (!dragging || !mapRenderState) return;
+    const dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
+    mapCamera.cx = camStartCx - dx / mapRenderState.scale;
+    mapCamera.cy = camStartCy - dy / mapRenderState.scale;
+    const ct4 = currentTruck();
+    if (ct4) renderMap(ct4);
+  });
+  const endDrag = () => { dragging = false; };
+  mapCanvas.addEventListener('pointerup', endDrag);
+  mapCanvas.addEventListener('pointercancel', endDrag);
+
+  document.getElementById('mapZoomIn').addEventListener('click', () => zoomMapBy(1.4));
+  document.getElementById('mapZoomOut').addEventListener('click', () => zoomMapBy(1 / 1.4));
+  document.getElementById('mapZoomReset').addEventListener('click', resetMapView);
+})();
+
+recompute();
 </script>
