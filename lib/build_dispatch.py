@@ -59,7 +59,7 @@ def columns_per_pallet(bw, bl, eff_pw, eff_pl):
     return max(1, opt1, opt2)
 
 
-def pack_manual_columns(order_lines, max_total_height):
+def pack_manual_columns(order_lines, max_total_height, mode="greedy"):
     """手工疊車 only: 同客戶相鄰裝車序號可以疊在另一筆訂單的上方,只要不超過 max_total_height。
     Fills height budget across ORDERS at the box-quantity level, not as an all-or-nothing merge
     of whole pre-sized stacks: a customer's later, smaller-footprint order first contributes as
@@ -89,6 +89,13 @@ def pack_manual_columns(order_lines, max_total_height):
     lng, route, main_road, item_code, box_w, box_l, t, qty) -- chunking into height-capped
     stacks happens here, per column, instead of upfront, since how much of an order's quantity
     goes on an existing column vs. a fresh one isn't known until this pass runs.
+
+    `mode`: "greedy" (default) is the ordinary same-customer on-top-stacking behaviour above.
+    "none" skips riding entirely -- every line becomes its own independent column. Used by
+    build()'s joint stacking/floor-placement comparison: a customer whose orders happen to tile
+    the floor well side by side can come out ahead with NO height-stacking at all, which greedy
+    mode has no way to discover since it commits to a stacking decision before floor placement
+    (try_place) ever runs.
     """
     by_cust = {}
     for ol in order_lines:
@@ -106,7 +113,7 @@ def pack_manual_columns(order_lines, max_total_height):
             remaining = ol["qty"]
             lo, hi = sorted((ol["box_w"], ol["box_l"]))
 
-            for col in columns:
+            for col in (columns if mode == "greedy" else []):
                 if remaining <= 0:
                     break
                 b_lo, b_hi = sorted((col["w"], col["l"]))
@@ -142,6 +149,34 @@ def pack_manual_columns(order_lines, max_total_height):
                 stacks.append(stack)
                 remaining -= n
     return stacks
+
+
+def unmerge_to_order_lines(stacks):
+    """Inverse of pack_manual_columns: reconstructs UNCHUNKED order-lines (one per distinct
+    order+item+dims, qty = every chunk's boxes summed back together) from a batch of ALREADY-
+    merged stacks -- whatever base+rider structure a previous pack_manual_columns run gave them
+    is discarded, not read. Used by build()'s per-customer placement loop to re-derive a
+    customer's true order quantities so an ALTERNATE stacking strategy can be tried against the
+    exact same cargo, instead of being stuck with whichever stacking decision the very first
+    (global) pass already committed to."""
+    agg = {}
+
+    def add_chunk(s):
+        key = (s["cust_code"], s["order_no"], s["item_code"], s["box_w"], s["box_l"], s["t"])
+        if key not in agg:
+            agg[key] = {
+                "order_no": s["order_no"], "cust_code": s["cust_code"], "cust_name": s["cust_name"],
+                "lat": s["lat"], "lng": s["lng"], "route": s["route"], "main_road": s["main_road"],
+                "item_code": s["item_code"], "box_w": s["box_w"], "box_l": s["box_l"], "t": s["t"],
+                "qty": 0,
+            }
+        agg[key]["qty"] += s["boxes"]
+
+    for s in stacks:
+        add_chunk(s)
+        for c in s.get("_children", []):
+            add_chunk(c)
+    return list(agg.values())
 
 
 def expand_items_with_children(items):
@@ -604,19 +639,17 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     TRUCK_VOL = truck_l * truck_w * truck_h
     VOL_BUCKET = TRUCK_VOL * 0.014  # ~1.4% of truck volume: trucks within the same bucket count as "equally full"
 
-    by_cust = {}
-    for s in stacks:
-        by_cust.setdefault(s["cust_code"], []).append(s)
-    cust_groups = list(by_cust.values())
-    for g in cust_groups:
-        g.sort(key=lambda s: (-(s["w"] * s["l"]), s["order_no"], s["item_code"]))
-    cust_groups.sort(key=lambda g: -sum(s["w"] * s["l"] for s in g))
-
-    trucks = []
-    for cust_stacks in cust_groups:
-        cust_code = cust_stacks[0]["cust_code"]
+    def place_customer(trucks_in, cust_stacks, cust_code):
+        """Try cust_stacks against every grouping-compatible existing truck (best-fit-decreasing
+        by leftover volume, road-proximity tiebreak), else a fresh truck, else split across
+        multiple dedicated fresh trucks. Returns (new_trucks_list, num_new_trucks_added,
+        leftover_bucket_or_None) without mutating trucks_in -- existing truck dicts are only
+        ever replaced wholesale (via clone_truck) in the RETURNED list, never mutated in place,
+        so trying this against the same trucks_in twice with different cust_stacks candidates
+        (see the joint stacking/floor-placement comparison below) never cross-contaminates."""
+        trucks_out = list(trucks_in)
         best_idx, best_state, best_bucket, best_prox = -1, None, None, None
-        for i, truck in enumerate(trucks):
+        for i, truck in enumerate(trucks_out):
             if not grouping_compatible(truck, cust_code):
                 continue
             trial = clone_truck(truck)
@@ -633,9 +666,9 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             if best_idx < 0 or bucket < best_bucket or (bucket == best_bucket and prox < best_prox):
                 best_idx, best_state, best_bucket, best_prox = i, trial, bucket, prox
         if best_idx >= 0:
-            trucks[best_idx] = best_state
-            lock_truck_grouping(trucks[best_idx], cust_code)
-            continue
+            trucks_out[best_idx] = best_state
+            lock_truck_grouping(trucks_out[best_idx], cust_code)
+            return trucks_out, 0, best_bucket
 
         # no existing truck can take the whole customer -- try a brand new (empty) truck
         # before ever resorting to splitting.
@@ -646,17 +679,19 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 fresh_ok = False
                 break
         if fresh_ok:
-            trucks.append(fresh)
-            lock_truck_grouping(fresh, cust_code)
-            continue
+            trucks_out.append(fresh)
+            lock_truck_grouping(trucks_out[-1], cust_code)
+            return trucks_out, 1, None
 
         # doesn't fit any single truck even empty -- this customer's own order genuinely
         # needs more than one truck; fill dedicated fresh trucks one stack at a time.
+        added = 0
         cur = new_truck()
         for s in cust_stacks:
             if not try_place(cur, s):
-                trucks.append(cur)
-                lock_truck_grouping(cur, cust_code)
+                trucks_out.append(cur)
+                lock_truck_grouping(trucks_out[-1], cust_code)
+                added += 1
                 cur = new_truck()
                 if not try_place(cur, s):
                     # genuinely doesn't fit an empty truck in any orientation -- the earlier
@@ -665,8 +700,60 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                     print(f"WARNING: stack does not fit an empty truck in any orientation, excluded: "
                           f"order={s['order_no']} item={s['item_code']} w={s['w']} l={s['l']} height={s['height']}")
                     continue
-        trucks.append(cur)
-        lock_truck_grouping(cur, cust_code)
+        trucks_out.append(cur)
+        lock_truck_grouping(trucks_out[-1], cust_code)
+        added += 1
+        return trucks_out, added, None
+
+    by_cust = {}
+    for s in stacks:
+        by_cust.setdefault(s["cust_code"], []).append(s)
+    cust_groups = list(by_cust.values())
+    for g in cust_groups:
+        g.sort(key=lambda s: (-(s["w"] * s["l"]), s["order_no"], s["item_code"]))
+    cust_groups.sort(key=lambda g: -sum(s["w"] * s["l"] for s in g))
+
+    # 手工疊車 only: the stacking decision (pack_manual_columns, which orders ride on top of
+    # which) and the floor-placement decision (try_place's row packing) are coupled -- a
+    # stacking choice made with zero visibility into the floor layout can use up an item that
+    # would have completed a row perfectly side by side, and floor placement can only work with
+    # whatever units stacking already committed to; it has no way to "unstack" something and try
+    # again. Truly solving that jointly (optimal placement with conditional height-merging) is
+    # NP-hard in general. What IS tractable: generate an alternate stacking DECISION for this
+    # customer's own cargo (no height-stacking at all -- see pack_manual_columns mode="none"),
+    # run it through the exact same placement logic as the baseline, and keep whichever
+    # candidate's ACTUAL resulting truck count is best (fewer new trucks wins outright; a tie
+    # falls back to whichever leaves a fuller existing truck, i.e. the smaller leftover-volume
+    # bucket). The baseline (whatever the global pack_manual_columns pass already decided) is
+    # always one of the candidates, so this can never do worse than not trying at all.
+    trucks = []
+    for cust_stacks in cust_groups:
+        cust_code = cust_stacks[0]["cust_code"]
+        candidates = [cust_stacks]
+        if manual:
+            # vertical (oversized-cross-section) stacks never went through pack_manual_columns
+            # in the first place -- their "w"/"l" is a transformed stand-up-on-edge footprint,
+            # not the true box_w/box_l unmerge_to_order_lines would reconstruct from, so feeding
+            # them back through it would corrupt their packing footprint. Identify them the same
+            # way build() originally did (both true dims exceed truck_w) and leave them out of
+            # the alternate candidate entirely, unchanged.
+            verticals = [s for s in cust_stacks if s["box_w"] > truck_w and s["box_l"] > truck_w]
+            flat_stacks = [s for s in cust_stacks if not (s["box_w"] > truck_w and s["box_l"] > truck_w)]
+            if flat_stacks:
+                order_lines = unmerge_to_order_lines(flat_stacks)
+                candidates.append(verticals + pack_manual_columns(order_lines, MAX_TOTAL_HEIGHT, mode="none"))
+
+        best_trucks, best_added, best_bucket = None, None, None
+        for cand in candidates:
+            cand_trucks, added, bucket = place_customer(trucks, cand, cust_code)
+            better = (
+                best_added is None
+                or added < best_added
+                or (added == best_added and bucket is not None and (best_bucket is None or bucket < best_bucket))
+            )
+            if better:
+                best_trucks, best_added, best_bucket = cand_trucks, added, bucket
+        trucks = best_trucks
 
     trucks = consolidate_trucks(trucks)
 
