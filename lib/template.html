@@ -503,7 +503,7 @@
 
 <script>
 const RAW_LINES_BY_PLANT = /*__RAW_LINES__*/{}/*__END_RAW_LINES__*/;
-const REPORT_DEFAULTS = /*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/;
+const REPORT_DEFAULTS = /*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01","rangeStart":"2026-07-01","rangeEnd":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/;
 const PLANT_ORDER = ["T2", "T10", "T3", "T6"];
 let CURRENT_PLANT = REPORT_DEFAULTS.plantCode;
 function currentLines() { return RAW_LINES_BY_PLANT[CURRENT_PLANT]?.lines || []; }
@@ -2108,16 +2108,17 @@ function simulateSingleTruck(lines) {
 
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 function defaultRange() {
-  // production report: the CSV is already one extraction batch for ONE order-date (unlike the
-  // demo Artifact, which spans a rolling multi-day window) -- default the visible range to
-  // exactly that date so recompute()'s filter doesn't exclude the only data present.
-  return [REPORT_DEFAULTS.dateLabel, REPORT_DEFAULTS.dateLabel];
+  // production report: default the visible order-date range to exactly what this extraction
+  // batch covers (rangeStart..rangeEnd, computed server-side from the actual data), not the demo
+  // Artifact's rolling "today +/- N" window -- there's no reason to default to a window that
+  // might not even overlap with the data that's actually embedded.
+  return [REPORT_DEFAULTS.rangeStart, REPORT_DEFAULTS.rangeEnd];
 }
 function defaultDeliveryDate() {
-  // production's extraction doesn't currently carry a delivery-date (oea101) column per line
-  // (every line's `dd` comes through as null -- see buildStacks) -- defaulting this filter to
-  // "tomorrow" the way the demo Artifact does would exclude every row (null never equals a
-  // specific date string) and the report would load empty. Cleared is the only safe default.
+  // unlike the demo Artifact (which defaults this to "tomorrow", a sensible day to plan around),
+  // production's extraction batch could be centered on any date range -- "tomorrow" might not
+  // even fall inside it. Cleared shows everything in the extracted range on first load, which is
+  // always safe regardless of what date range was pulled.
   return '';
 }
 

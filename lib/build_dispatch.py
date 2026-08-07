@@ -132,7 +132,7 @@ def pack_manual_columns(order_lines, max_total_height, mode="greedy"):
                 child = {
                     "order_no": ol["order_no"], "cust_code": ol["cust_code"], "cust_name": ol["cust_name"],
                     "lat": ol["lat"], "lng": ol["lng"], "route": ol["route"], "main_road": ol["main_road"],
-                    "item_code": ol["item_code"], "boxes": n, "t": t,
+                    "item_code": ol["item_code"], "delivery_date": ol.get("delivery_date"), "boxes": n, "t": t,
                     "box_w": ol["box_w"], "box_l": ol["box_l"],
                     "height": n * t, "y0": col["used_height"],
                 }
@@ -147,7 +147,7 @@ def pack_manual_columns(order_lines, max_total_height, mode="greedy"):
                 stack = {
                     "order_no": ol["order_no"], "cust_code": ol["cust_code"], "cust_name": ol["cust_name"],
                     "lat": ol["lat"], "lng": ol["lng"], "route": ol["route"], "main_road": ol["main_road"],
-                    "item_code": ol["item_code"], "boxes": n, "t": t,
+                    "item_code": ol["item_code"], "delivery_date": ol.get("delivery_date"), "boxes": n, "t": t,
                     "box_w": ol["box_w"], "box_l": ol["box_l"],
                     "w": ol["box_w"], "l": ol["box_l"],
                     "height": n * t, "y0": 0.0, "_own_height": n * t,
@@ -174,7 +174,8 @@ def unmerge_to_order_lines(stacks):
             agg[key] = {
                 "order_no": s["order_no"], "cust_code": s["cust_code"], "cust_name": s["cust_name"],
                 "lat": s["lat"], "lng": s["lng"], "route": s["route"], "main_road": s["main_road"],
-                "item_code": s["item_code"], "box_w": s["box_w"], "box_l": s["box_l"], "t": s["t"],
+                "item_code": s["item_code"], "delivery_date": s.get("delivery_date"),
+                "box_w": s["box_w"], "box_l": s["box_l"], "t": s["t"],
                 "qty": 0,
             }
         agg[key]["qty"] += s["boxes"]
@@ -323,7 +324,7 @@ def write_dispatch_xlsx(out_xlsx, header, rows):
     number type on the numeric columns (so Excel won't mangle order numbers as dates/scientific
     notation the way it sometimes does with plain CSV), bold header, borders, autosized columns,
     a frozen header row and an autofilter so it's usable straight out of the download."""
-    numeric_cols = {6, 7, 8, 9, 10}  # 1-indexed: 箱數, 寬mm, 長mm, 厚mm, 堆疊數
+    numeric_cols = {7, 8, 9, 10, 11}  # 1-indexed: 箱數, 寬mm, 長mm, 厚mm, 堆疊數
 
     wb = Workbook()
     ws = wb.active
@@ -394,7 +395,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # keeping them as their own independent stacks, same as pallet mode, is the pragmatic choice.
     manual = load_mode == "manual"
     stacks = []
-    manual_flat_lines = []
+    manual_flat_lines_by_date = {}
     skipped_oversized = []
     for r in rows:
         qty = _safe_float(r["qty_box"])
@@ -403,6 +404,11 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             continue
         lat = (r.get("ship_lat") or "").strip()
         lng = (r.get("ship_lng") or "").strip()
+        # 訂單交期(oea101)-- a truck must never carry orders due out on different dates (see
+        # pack() below). Falls back to "(無送貨日)" for blank/unset, matching the demo Artifact's
+        # own convention exactly, so a customer's orders with no delivery date set still group
+        # together as one bucket instead of each silently becoming its own single-order "date".
+        delivery_date = _to_iso_date(r.get("delivery_date")) if (r.get("delivery_date") or "").strip() else "(無送貨日)"
 
         vertical = w > truck_w and l > truck_w
         if vertical:
@@ -425,7 +431,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                     "lng": float(lng) if lng else None,
                     "route": (r.get("route") or "").strip() or None,
                     "main_road": (r.get("main_road") or "").strip() or None,
-                    "item_code": r["item_code"],
+                    "item_code": r["item_code"], "delivery_date": delivery_date,
                     "boxes": n, "t": t, "box_w": w, "box_l": l,
                     "w": n * t, "l": depth_dim, "height": height_dim,
                 })
@@ -433,7 +439,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             continue
 
         if manual:
-            manual_flat_lines.append({
+            manual_flat_lines_by_date.setdefault(delivery_date, []).append({
                 "order_no": r["order_no"],
                 "cust_code": r["ship_cust_code"].strip(),
                 "cust_name": r["ship_cust_name"].strip(),
@@ -441,7 +447,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "lng": float(lng) if lng else None,
                 "route": (r.get("route") or "").strip() or None,
                 "main_road": (r.get("main_road") or "").strip() or None,
-                "item_code": r["item_code"],
+                "item_code": r["item_code"], "delivery_date": delivery_date,
                 "box_w": w, "box_l": l, "t": t, "qty": qty,
             })
             continue
@@ -464,14 +470,18 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
                 "lng": float(lng) if lng else None,
                 "route": (r.get("route") or "").strip() or None,
                 "main_road": (r.get("main_road") or "").strip() or None,
-                "item_code": r["item_code"],
+                "item_code": r["item_code"], "delivery_date": delivery_date,
                 "boxes": n, "t": t, "box_w": w, "box_l": l,
                 "w": foot_w, "l": foot_l, "height": PALLET_BASE_HEIGHT + layers_used * t,
             })
             remaining -= n
 
-    if manual_flat_lines:
-        stacks.extend(pack_manual_columns(manual_flat_lines, MAX_TOTAL_HEIGHT))
+    # manual-mode same-customer on-top stacking must never merge orders due out on different
+    # dates -- calling pack_manual_columns separately PER delivery-date bucket (instead of once
+    # across everything) makes that structurally impossible rather than relying on a check
+    # somewhere downstream to catch it.
+    for delivery_date, lines in manual_flat_lines_by_date.items():
+        stacks.extend(pack_manual_columns(lines, MAX_TOTAL_HEIGHT))
 
     if skipped_oversized:
         print(f"WARNING: {len(skipped_oversized)} order line(s) exceed the truck's cross-section in every orientation (flat or standing) and were excluded from dispatch planning -- these need manual arrangement:")
@@ -730,88 +740,102 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         added += 1
         return trucks_out, added, None
 
-    by_cust = {}
+    # never mix delivery dates on one truck -- group first, then run the customer-clustering/
+    # floor-packing pipeline separately per date, same as manual-mode stacking above already
+    # does. "(無送貨日)" sorts last so real dates read in order first.
+    stacks_by_date = {}
     for s in stacks:
-        by_cust.setdefault(s["cust_code"], []).append(s)
-    cust_groups = list(by_cust.values())
-    for g in cust_groups:
-        g.sort(key=lambda s: (-(s["w"] * s["l"]), s["order_no"], s["item_code"]))
-    cust_groups.sort(key=lambda g: -sum(s["w"] * s["l"] for s in g))
-
-    # 手工疊車 only: the stacking decision (pack_manual_columns, which orders ride on top of
-    # which) and the floor-placement decision (try_place's row packing) are coupled -- a
-    # stacking choice made with zero visibility into the floor layout can use up an item that
-    # would have completed a row perfectly side by side, and floor placement can only work with
-    # whatever units stacking already committed to; it has no way to "unstack" something and try
-    # again. Truly solving that jointly (optimal placement with conditional height-merging) is
-    # NP-hard in general. What IS tractable: generate an alternate stacking DECISION for this
-    # customer's own cargo (no height-stacking at all -- see pack_manual_columns mode="none"),
-    # run it through the exact same placement logic as the baseline, and keep whichever
-    # candidate's ACTUAL resulting truck count is best (fewer new trucks wins outright; a tie
-    # falls back to whichever leaves a fuller existing truck, i.e. the smaller leftover-volume
-    # bucket). The baseline (whatever the global pack_manual_columns pass already decided) is
-    # always one of the candidates, so this can never do worse than not trying at all.
-    trucks = []
-    for cust_stacks in cust_groups:
-        cust_code = cust_stacks[0]["cust_code"]
-        candidates = [cust_stacks]
-        if manual:
-            # vertical (oversized-cross-section) stacks never went through pack_manual_columns
-            # in the first place -- their "w"/"l" is a transformed stand-up-on-edge footprint,
-            # not the true box_w/box_l unmerge_to_order_lines would reconstruct from, so feeding
-            # them back through it would corrupt their packing footprint. Identify them the same
-            # way build() originally did (both true dims exceed truck_w) and leave them out of
-            # the alternate candidate entirely, unchanged.
-            verticals = [s for s in cust_stacks if s["box_w"] > truck_w and s["box_l"] > truck_w]
-            flat_stacks = [s for s in cust_stacks if not (s["box_w"] > truck_w and s["box_l"] > truck_w)]
-            if flat_stacks:
-                order_lines = unmerge_to_order_lines(flat_stacks)
-                candidates.append(verticals + pack_manual_columns(order_lines, MAX_TOTAL_HEIGHT, mode="none"))
-
-        best_trucks, best_added, best_bucket = None, None, None
-        for cand in candidates:
-            cand_trucks, added, bucket = place_customer(trucks, cand, cust_code)
-            better = (
-                best_added is None
-                or added < best_added
-                or (added == best_added and bucket is not None and (best_bucket is None or bucket < best_bucket))
-            )
-            if better:
-                best_trucks, best_added, best_bucket = cand_trucks, added, bucket
-        trucks = best_trucks
-
-    trucks = consolidate_trucks(trucks)
+        stacks_by_date.setdefault(s["delivery_date"], []).append(s)
+    date_keys = sorted(stacks_by_date.keys(), key=lambda d: (d == "(無送貨日)", d))
 
     truck_out = []
-    for ti, t in enumerate(trucks, start=1):
-        # manual mode's merged columns (see pack_manual_columns) travel as one placeable unit
-        # through packing/consolidation -- unpack each rider back into its own report row here.
-        items = expand_items_with_children([it for row in t["rows"] for it in row["items"]])
-        # 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積除以整台
-        # 車廂容積,才反映得出這台車實際裝了多少東西,而不是只看地板佔了多少。
-        cargo_vol = sum(it["dx"] * it["dy"] * it["height"] for it in items)
-        cust_counts = {}
-        for it in items:
-            key = (it["cust_code"], it["cust_name"])
-            cust_counts[key] = cust_counts.get(key, 0) + 1
-        primary_cust = max(cust_counts.items(), key=lambda kv: kv[1])[0] if cust_counts else ("", "")
-        truck_out.append({
-            "truck_no": ti,
-            "load_pct": round(cargo_vol / (truck_l * truck_w * truck_h) * 100, 1),
-            "num_stacks": len(items),
-            "num_customers": len(cust_counts),
-            "primary_cust_code": primary_cust[0],
-            "primary_cust_name": primary_cust[1],
-            "items": items,
-        })
+    truck_no = 0
+    for delivery_date in date_keys:
+        date_stacks = stacks_by_date[delivery_date]
+
+        by_cust = {}
+        for s in date_stacks:
+            by_cust.setdefault(s["cust_code"], []).append(s)
+        cust_groups = list(by_cust.values())
+        for g in cust_groups:
+            g.sort(key=lambda s: (-(s["w"] * s["l"]), s["order_no"], s["item_code"]))
+        cust_groups.sort(key=lambda g: -sum(s["w"] * s["l"] for s in g))
+
+        # 手工疊車 only: the stacking decision (pack_manual_columns, which orders ride on top of
+        # which) and the floor-placement decision (try_place's row packing) are coupled -- a
+        # stacking choice made with zero visibility into the floor layout can use up an item that
+        # would have completed a row perfectly side by side, and floor placement can only work
+        # with whatever units stacking already committed to; it has no way to "unstack" something
+        # and try again. Truly solving that jointly (optimal placement with conditional height-
+        # merging) is NP-hard in general. What IS tractable: generate an alternate stacking
+        # DECISION for this customer's own cargo (no height-stacking at all -- see
+        # pack_manual_columns mode="none"), run it through the exact same placement logic as the
+        # baseline, and keep whichever candidate's ACTUAL resulting truck count is best (fewer
+        # new trucks wins outright; a tie falls back to whichever leaves a fuller existing truck,
+        # i.e. the smaller leftover-volume bucket). The baseline (whatever the earlier
+        # pack_manual_columns pass already decided) is always one of the candidates, so this can
+        # never do worse than not trying at all.
+        trucks = []
+        for cust_stacks in cust_groups:
+            cust_code = cust_stacks[0]["cust_code"]
+            candidates = [cust_stacks]
+            if manual:
+                # vertical (oversized-cross-section) stacks never went through pack_manual_columns
+                # in the first place -- their "w"/"l" is a transformed stand-up-on-edge footprint,
+                # not the true box_w/box_l unmerge_to_order_lines would reconstruct from, so
+                # feeding them back through it would corrupt their packing footprint. Identify
+                # them the same way build() originally did (both true dims exceed truck_w) and
+                # leave them out of the alternate candidate entirely, unchanged.
+                verticals = [s for s in cust_stacks if s["box_w"] > truck_w and s["box_l"] > truck_w]
+                flat_stacks = [s for s in cust_stacks if not (s["box_w"] > truck_w and s["box_l"] > truck_w)]
+                if flat_stacks:
+                    order_lines = unmerge_to_order_lines(flat_stacks)
+                    candidates.append(verticals + pack_manual_columns(order_lines, MAX_TOTAL_HEIGHT, mode="none"))
+
+            best_trucks, best_added, best_bucket = None, None, None
+            for cand in candidates:
+                cand_trucks, added, bucket = place_customer(trucks, cand, cust_code)
+                better = (
+                    best_added is None
+                    or added < best_added
+                    or (added == best_added and bucket is not None and (best_bucket is None or bucket < best_bucket))
+                )
+                if better:
+                    best_trucks, best_added, best_bucket = cand_trucks, added, bucket
+            trucks = best_trucks
+
+        trucks = consolidate_trucks(trucks)
+
+        for t in trucks:
+            truck_no += 1
+            # manual mode's merged columns (see pack_manual_columns) travel as one placeable unit
+            # through packing/consolidation -- unpack each rider back into its own report row here.
+            items = expand_items_with_children([it for row in t["rows"] for it in row["items"]])
+            # 裝載率 = 車廂空間使用率(體積),不是樓面使用率(面積) -- 每疊貨的實際體積除以整台
+            # 車廂容積,才反映得出這台車實際裝了多少東西,而不是只看地板佔了多少。
+            cargo_vol = sum(it["dx"] * it["dy"] * it["height"] for it in items)
+            cust_counts = {}
+            for it in items:
+                key = (it["cust_code"], it["cust_name"])
+                cust_counts[key] = cust_counts.get(key, 0) + 1
+            primary_cust = max(cust_counts.items(), key=lambda kv: kv[1])[0] if cust_counts else ("", "")
+            truck_out.append({
+                "truck_no": truck_no, "delivery_date": delivery_date,
+                "load_pct": round(cargo_vol / (truck_l * truck_w * truck_h) * 100, 1),
+                "num_stacks": len(items),
+                "num_customers": len(cust_counts),
+                "primary_cust_code": primary_cust[0],
+                "primary_cust_name": primary_cust[1],
+                "items": items,
+            })
 
     print(f"Total trucks needed: {len(truck_out)}")
     for t in truck_out:
         tag = t["primary_cust_name"] + ("" if t["num_customers"] == 1 else f"+{t['num_customers'] - 1}")
-        print(f"  Truck {t['truck_no']:2d}: {t['num_stacks']:3d} stacks, load {t['load_pct']}%  [{tag}]")
+        print(f"  Truck {t['truck_no']:2d} [{t['delivery_date']}]: {t['num_stacks']:3d} stacks, load {t['load_pct']}%  [{tag}]")
 
     # dispatch sheet (排車單): per truck x order aggregation, grouped by delivery customer
-    sheet_header = ["車次", "送貨客戶代號", "送貨客戶名稱", "訂單號", "品號", "箱數", "寬mm", "長mm", "厚mm", "堆疊數"]
+    sheet_header = ["車次", "送貨交期", "送貨客戶代號", "送貨客戶名稱", "訂單號", "品號", "箱數", "寬mm", "長mm", "厚mm", "堆疊數"]
     sheet_rows = []
     for t in truck_out:
         agg = {}
@@ -821,7 +845,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
             agg[key]["boxes"] += it["boxes"]
             agg[key]["stacks"] += 1
         for (cust_code, cust_name, order_no, item, w, l, th), v in sorted(agg.items(), key=lambda kv: route_order[kv[0][0]]):
-            sheet_rows.append([f"車次{t['truck_no']}", cust_code, cust_name, order_no, item, int(v["boxes"]), w, l, th, v["stacks"]])
+            sheet_rows.append([f"車次{t['truck_no']}", t["delivery_date"], cust_code, cust_name, order_no, item, int(v["boxes"]), w, l, th, v["stacks"]])
 
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     with open(out_csv, "w", newline="", encoding="utf-8-sig") as f:
@@ -850,10 +874,11 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
             continue
         order_date_iso = _to_iso_date(r["order_date"])
+        delivery_date_iso = _to_iso_date(r.get("delivery_date")) if (r.get("delivery_date") or "").strip() else None
         lat = (r.get("ship_lat") or "").strip()
         lng = (r.get("ship_lng") or "").strip()
         raw_lines.append({
-            "o": r["order_no"], "od": order_date_iso, "dd": None,
+            "o": r["order_no"], "od": order_date_iso, "dd": delivery_date_iso,
             "cc": r["ship_cust_code"].strip(), "cn": r["ship_cust_name"].strip(),
             "lat": float(lat) if lat else None, "lng": float(lng) if lng else None,
             "rt": (r.get("route") or "").strip() or None, "mr": (r.get("main_road") or "").strip() or None,
@@ -862,9 +887,12 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         })
 
     raw_lines_by_plant = {plant_code: {"label": PLANT_NAMES.get(plant_code, plant_code), "lines": raw_lines}}
+    order_dates = sorted({rl["od"] for rl in raw_lines if rl["od"]})
     report_defaults = {
         "truckL": truck_l, "truckW": truck_w, "truckH": truck_h,
         "loadMode": load_mode, "plantCode": plant_code, "dateLabel": date_label,
+        "rangeStart": order_dates[0] if order_dates else date_label,
+        "rangeEnd": order_dates[-1] if order_dates else date_label,
     }
 
     with open(template_path, encoding="utf-8") as f:
@@ -874,7 +902,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         json.dumps(raw_lines_by_plant, ensure_ascii=False, separators=(",", ":")),
     )
     html = html.replace(
-        '/*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/',
+        '/*__REPORT_DEFAULTS__*/{"truckL":8700,"truckW":2400,"truckH":2400,"loadMode":"pallet","plantCode":"T2","dateLabel":"2026-07-01","rangeStart":"2026-07-01","rangeEnd":"2026-07-01"}/*__END_REPORT_DEFAULTS__*/',
         json.dumps(report_defaults, ensure_ascii=False, separators=(",", ":")),
     )
     html = html.replace("<title>排車單與3D裝載模擬</title>",

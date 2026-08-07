@@ -1,6 +1,9 @@
 <#
-  Extracts one day's confirmed sales orders (with product dimensions and delivery
-  customer geo-coordinates) from the T10 Informix ERP database into a CSV file.
+  Extracts a date RANGE of confirmed sales orders (with product dimensions and delivery
+  customer geo-coordinates) from the T10 Informix ERP database into a CSV file. Filters on
+  oea02 (訂單日期/order date); oea101 (訂單交期/delivery date) is pulled through as its own
+  column so downstream tools can separate trucks by delivery date the way they're supposed
+  to -- a single truck should never carry orders due out on different dates.
 
   Excludes order LINES that have already shipped: cxd_file is the shipment-note detail
   table, cxd03=oeb01 and cxd04=oeb03 together link a shipment line back to the SPECIFIC
@@ -53,12 +56,13 @@
   newly-included 平板 lines, for a spot-checked date.
 
   Must run under 32-bit PowerShell (the installed Informix ODBC driver is 32-bit only):
-    C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -Date 2026-07-08
+    C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -File extract_orders.ps1 -StartDate 2026-07-01 -EndDate 2026-07-08
 
   run.ps1 handles this automatically -- you normally don't call this script directly.
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$Date,      # yyyy-MM-dd
+    [Parameter(Mandatory = $true)][string]$StartDate,  # yyyy-MM-dd
+    [Parameter(Mandatory = $true)][string]$EndDate,    # yyyy-MM-dd, inclusive
     [string]$ConfigPath = (Join-Path $PSScriptRoot "..\config.json"),
     [string]$OutCsv
 )
@@ -69,15 +73,17 @@ $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 $db = $config.db
 
 if (-not $OutCsv) {
-    $OutCsv = Join-Path $PSScriptRoot "..\output\orders_$Date.csv"
+    $OutCsv = Join-Path $PSScriptRoot "..\output\orders_${StartDate}_to_${EndDate}.csv"
 }
 New-Item -ItemType Directory -Force -Path (Split-Path $OutCsv) | Out-Null
 
 $env:INFORMIXDIR = $db.informixdir
 $env:PATH = "$($db.informixdir)\bin;$env:PATH"
 
-$d = [datetime]::ParseExact($Date, "yyyy-MM-dd", $null)
-$mdy = "MDY($($d.Month),$($d.Day),$($d.Year))"
+$dStart = [datetime]::ParseExact($StartDate, "yyyy-MM-dd", $null)
+$dEnd = [datetime]::ParseExact($EndDate, "yyyy-MM-dd", $null)
+$mdyStart = "MDY($($dStart.Month),$($dStart.Day),$($dStart.Year))"
+$mdyEnd = "MDY($($dEnd.Month),$($dEnd.Day),$($dEnd.Year))"
 
 $connStr = "DSN=$($db.dsn);DATABASE=$($db.database);UID=$($db.uid);PWD=$($db.pwd);"
 $conn = New-Object System.Data.Odbc.OdbcConnection($connStr)
@@ -86,7 +92,7 @@ $cmd = $conn.CreateCommand()
 $cmd.CommandTimeout = 90
 $cmd.CommandText = @"
 SELECT
-  a.oea01 AS order_no, a.oea02 AS order_date, a.oea04 AS ship_cust_code,
+  a.oea01 AS order_no, a.oea02 AS order_date, a.oea101 AS delivery_date, a.oea04 AS ship_cust_code,
   o.occ02 AS ship_cust_name, o.occ732 AS ship_lat, o.occ733 AS ship_lng,
   o.occ735 AS route, o.occ734 AS main_road,
   b.oeb04 AS item_code, b.oeb12 AS qty_box, b.oeb03 AS line_no,
@@ -94,7 +100,7 @@ SELECT
 FROM oea_file a
 JOIN oeb_file b ON a.oea01 = b.oeb01
 JOIN occ_file o ON a.oea04 = o.occ01
-WHERE a.oea02 = $mdy
+WHERE a.oea02 BETWEEN $mdyStart AND $mdyEnd
   AND a.oeaconf = 'Y'
   AND SUBSTR(a.oea01,3,1) <> 'B'
 ORDER BY a.oea04, a.oea01
@@ -136,7 +142,7 @@ function CsvField($v) {
 }
 
 $sw = New-Object System.IO.StreamWriter($OutCsv, $false, [System.Text.Encoding]::UTF8)
-$sw.WriteLine("order_no,order_date,ship_cust_code,ship_cust_name,ship_lat,ship_lng,route,main_road,item_code,qty_box,width_mm,length_mm,thickness_mm")
+$sw.WriteLine("order_no,order_date,delivery_date,ship_cust_code,ship_cust_name,ship_lat,ship_lng,route,main_road,item_code,qty_box,width_mm,length_mm,thickness_mm")
 $excludedCount = 0
 foreach ($row in $dt.Rows) {
     $key = "$($row['order_no'].ToString().Trim())|$($row['line_no'])"
@@ -154,7 +160,7 @@ foreach ($row in $dt.Rows) {
     }
 
     $fields = @(
-        (CsvField $row["order_no"]), (CsvField $row["order_date"]),
+        (CsvField $row["order_no"]), (CsvField $row["order_date"]), (CsvField $row["delivery_date"]),
         (CsvField $row["ship_cust_code"]), (CsvField $row["ship_cust_name"]),
         (CsvField $row["ship_lat"]), (CsvField $row["ship_lng"]),
         (CsvField $row["route"]), (CsvField $row["main_road"]),
