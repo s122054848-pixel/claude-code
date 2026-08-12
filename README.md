@@ -9,9 +9,9 @@
 
 ### 方式一:雙擊 `RunReport.hta`(不需要打指令,一般人用這個)
 
-雙擊 `RunReport.hta`,會開一個小視窗:選日期(預設今天)、車台尺寸留空就好(會讀 `config.json`),按「產生報表」。跑完會自動跳出瀏覽器開啟報表,視窗裡的黑色log框會即時顯示查詢/排車的過程與結果,失敗時錯誤訊息也會顯示在裡面。
+雙擊 `RunReport.hta`,會開一個小視窗:填「訂單日期起」(預設今天)、「訂單日期迄」留空只查單一天、要查一段區間才填、車台尺寸留空就好(會讀 `config.json`),按「產生報表」。跑完會自動跳出瀏覽器開啟報表,視窗裡的黑色log框會即時顯示查詢/排車的過程與結果,失敗時錯誤訊息也會顯示在裡面。
 
-產生成功後,再按「打包下載」會把當天的 `orders_<date>.csv`、`dispatch_sheet_<date>.csv`、`dispatch_<date>.html` 三個檔案打包成 `output\dispatch_package_<date>.zip`,並自動開啟資料夾,方便一次拿走或傳給別人(例如傳到通訊軟體、外部硬碟)。
+產生成功後,再按「打包下載」會把 `orders_<日期標籤>.csv`、`dispatch_sheet_<日期標籤>.csv`、`dispatch_<日期標籤>.html` 三個檔案打包成 `output\dispatch_package_<日期標籤>.zip`,並自動開啟資料夾,方便一次拿走或傳給別人(例如傳到通訊軟體、外部硬碟)。
 
 ⚠️ `.hta` 是 Windows 內建的「HTML Application」,能直接執行本機命令(這樣才能不開終端機就查ERP、跑Python)。如果貴公司IT有政策封鎖 `mshta.exe`(一種資安常見的鎖法),雙擊可能沒反應或被防毒攔截——這種情況請改用方式二。
 
@@ -19,16 +19,17 @@
 
 ```powershell
 cd C:\Bernard\IT\Claude\dispatch-planner
-.\run.ps1 -Date 2026-07-08
-.\run.ps1 -Date 2026-07-08 -Open          # 產生後自動用瀏覽器開啟報表
-.\run.ps1 -Date 2026-07-08 -TruckL 8700 -TruckW 2400 -TruckH 2400   # 覆寫車廂內徑(預設讀 config.json)
-.\run.ps1 -Date 2026-07-08 -LoadMode manual   # 手工疊車(預設 pallet 棧板疊車)
+.\run.ps1 -StartDate 2026-07-08                             # 單一天(EndDate 省略時預設等於 StartDate)
+.\run.ps1 -StartDate 2026-07-01 -EndDate 2026-07-08          # 一段日期區間,一次抓多天訂單
+.\run.ps1 -StartDate 2026-07-08 -Open                        # 產生後自動用瀏覽器開啟報表
+.\run.ps1 -StartDate 2026-07-08 -TruckL 8700 -TruckW 2400 -TruckH 2400   # 覆寫車廂內徑(預設讀 config.json)
+.\run.ps1 -StartDate 2026-07-08 -LoadMode manual             # 手工疊車(預設 pallet 棧板疊車)
 ```
 
-輸出檔案在 `output\`:
-- `orders_<date>.csv` — 從ERP撈出的原始訂單明細(含尺寸、送貨客戶經緯度)
-- `dispatch_sheet_<date>.csv` — 排車單
-- `dispatch_<date>.html` — 互動式報表(3D模擬 + 地圖 + 排車單),可直接雙擊用瀏覽器打開,也可以整份分享給別人(不需要伺服器,不需要網路)
+輸出檔案在 `output\`(檔名用 `<日期標籤>`,單一天就是 `yyyy-MM-dd`,區間則是 `yyyy-MM-dd_to_yyyy-MM-dd`):
+- `orders_<日期標籤>.csv` — 從ERP撈出的原始訂單明細(含尺寸、送貨交期、送貨客戶經緯度)
+- `dispatch_sheet_<日期標籤>.csv` / `.xlsx` — 排車單,多天範圍時每列都會標明「送貨交期」,同一車不會混到不同送貨日的訂單
+- `dispatch_<日期標籤>.html` — 互動式報表(3D模擬 + 地圖 + 排車單 + 模擬裝車),可直接雙擊用瀏覽器打開,也可以整份分享給別人(不需要伺服器,不需要網路);報表內也有自己的日期區間篩選,不受產生時的區間限制檔案本身已內嵌的資料
 
 ## 給新用戶安裝(要在自己電腦上直接跑 `run.ps1` 查ERP 的人才需要)
 
@@ -51,7 +52,7 @@ cd C:\Bernard\IT\Claude\dispatch-planner
    .\setup\Setup-InformixConnection.ps1
    ```
    這支腳本會讀 `config.json` 裡剛填的位址,把ERP主機代號寫進機器的 Informix 設定,並建立對應的ODBC DSN。DSN本身**不會**存帳號密碼,密碼只放在你自己的 `config.json`,腳本永遠不會碰到你的密碼。重複執行是安全的。
-7. **測試**:`.\run.ps1 -Date <隨便一個最近的日期> -Open`,或直接雙擊 `RunReport.hta`。跑成功、瀏覽器跳出報表,就代表這台電腦裝好了。
+7. **測試**:`.\run.ps1 -StartDate <隨便一個最近的日期> -Open`,或直接雙擊 `RunReport.hta`。跑成功、瀏覽器跳出報表,就代表這台電腦裝好了。
 
 ## 打包工具給別人(維護者用)
 

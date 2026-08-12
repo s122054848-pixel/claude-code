@@ -76,12 +76,17 @@
 <body onload="init()">
 <div class="wrap">
   <h1>出貨排車 &amp; 3D裝載模擬 產生器</h1>
-  <div class="sub">選日期,按「產生報表」就會查ERP、排車、產生HTML報表</div>
+  <div class="sub">選日期(可選一段範圍),按「產生報表」就會查ERP、排車、產生HTML報表</div>
 
   <div class="field-row">
-    <label>資料日期</label>
+    <label>訂單日期起</label>
     <input type="text" id="dateInput" placeholder="yyyy-MM-dd">
     <span class="hint">必填</span>
+  </div>
+  <div class="field-row">
+    <label>訂單日期迄</label>
+    <input type="text" id="dateEndInput" placeholder="留空=只查單一天">
+    <span class="hint">選填</span>
   </div>
   <div class="field-row">
     <label>車廂長 L (mm)</label>
@@ -110,7 +115,7 @@
 </div>
 
 <script language="VBScript">
-Dim rootDir, lastHtmlPath, lastDate
+Dim rootDir, lastHtmlPath, lastFileTag
 
 Sub init()
   rootDir = Left(document.location.pathname, InStrRev(document.location.pathname, "\"))
@@ -141,11 +146,18 @@ Sub setStatus(cls, txt)
 End Sub
 
 Sub runReport()
-  Dim d, cmd, shell, exec, line
+  Dim d, dEnd, fileTag, cmd, shell, exec, line
   d = Trim(dateInput.value)
   If d = "" Then
-    MsgBox "請先輸入資料日期,格式 yyyy-MM-dd"
+    MsgBox "請先輸入訂單日期(起),格式 yyyy-MM-dd"
     Exit Sub
+  End If
+  dEnd = Trim(dateEndInput.value)
+  If dEnd = "" Then dEnd = d
+  If dEnd = d Then
+    fileTag = d
+  Else
+    fileTag = d & "_to_" & dEnd
   End If
 
   runBtn.disabled = True
@@ -153,9 +165,13 @@ Sub runReport()
   zipBtn.disabled = True
   log.value = ""
   setStatus "running", "執行中..."
-  appendLog "== 開始產生 " & d & " 的排車報表 =="
+  If dEnd = d Then
+    appendLog "== 開始產生 " & d & " 的排車報表 =="
+  Else
+    appendLog "== 開始產生 " & d & " ~ " & dEnd & " 的排車報表 =="
+  End If
 
-  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & rootDir & "run.ps1"" -Date " & d
+  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & rootDir & "run.ps1"" -StartDate " & d & " -EndDate " & dEnd
   If Trim(truckL.value) <> "" Then cmd = cmd & " -TruckL " & Trim(truckL.value)
   If Trim(truckW.value) <> "" Then cmd = cmd & " -TruckW " & Trim(truckW.value)
   If Trim(truckH.value) <> "" Then cmd = cmd & " -TruckH " & Trim(truckH.value)
@@ -182,8 +198,8 @@ Sub runReport()
   runBtn.disabled = False
 
   If exec.ExitCode = 0 Then
-    lastDate = d
-    lastHtmlPath = rootDir & "output\dispatch_" & d & ".html"
+    lastFileTag = fileTag
+    lastHtmlPath = rootDir & "output\dispatch_" & fileTag & ".html"
     setStatus "ok", "完成"
     appendLog "== 完成 =="
     openBtn.disabled = False
@@ -230,22 +246,22 @@ End Sub
 
 Sub packageZip()
   Dim fso, shellApp, zipPath, zipFolder, candidates(2), i, added
-  If lastDate = "" Then Exit Sub
+  If lastFileTag = "" Then Exit Sub
 
   zipBtn.disabled = True
   setStatus "running", "打包中..."
-  appendLog "== 打包 " & lastDate & " 的輸出檔案 =="
+  appendLog "== 打包 " & lastFileTag & " 的輸出檔案 =="
 
   Set fso = CreateObject("Scripting.FileSystemObject")
-  zipPath = rootDir & "output\dispatch_package_" & lastDate & ".zip"
+  zipPath = rootDir & "output\dispatch_package_" & lastFileTag & ".zip"
   CreateEmptyZip zipPath
 
   Set shellApp = CreateObject("Shell.Application")
   Set zipFolder = shellApp.NameSpace(zipPath)
 
-  candidates(0) = rootDir & "output\orders_" & lastDate & ".csv"
-  candidates(1) = rootDir & "output\dispatch_sheet_" & lastDate & ".csv"
-  candidates(2) = rootDir & "output\dispatch_" & lastDate & ".html"
+  candidates(0) = rootDir & "output\orders_" & lastFileTag & ".csv"
+  candidates(1) = rootDir & "output\dispatch_sheet_" & lastFileTag & ".csv"
+  candidates(2) = rootDir & "output\dispatch_" & lastFileTag & ".html"
 
   added = 0
   For i = 0 To UBound(candidates)
