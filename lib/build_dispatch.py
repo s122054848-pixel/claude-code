@@ -239,6 +239,32 @@ def _to_iso_date(value):
     return value
 
 
+def rows_to_raw_lines(rows):
+    """Converts extract_orders.ps1's CSV rows into the compact per-line dicts the HTML report's
+    client-side packing engine expects (the same shape the demo Artifact embeds). Shared between
+    build()'s static HTML export and server.py's live /api/orders endpoint so the two don't drift
+    out of sync with two separate implementations of the same field mapping."""
+    raw_lines = []
+    for r in rows:
+        qty = _safe_float(r["qty_box"])
+        w = _safe_float(r["width_mm"]); l = _safe_float(r["length_mm"]); t = _safe_float(r["thickness_mm"])
+        if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
+            continue
+        order_date_iso = _to_iso_date(r["order_date"])
+        delivery_date_iso = _to_iso_date(r.get("delivery_date")) if (r.get("delivery_date") or "").strip() else None
+        lat = (r.get("ship_lat") or "").strip()
+        lng = (r.get("ship_lng") or "").strip()
+        raw_lines.append({
+            "o": r["order_no"], "od": order_date_iso, "dd": delivery_date_iso,
+            "cc": r["ship_cust_code"].strip(), "cn": r["ship_cust_name"].strip(),
+            "lat": float(lat) if lat else None, "lng": float(lng) if lng else None,
+            "rt": (r.get("route") or "").strip() or None, "mr": (r.get("main_road") or "").strip() or None,
+            "ic": r["item_code"], "q": qty, "w": w, "l": l, "t": t,
+            "fl": "", "uc": None,
+        })
+    return raw_lines
+
+
 def haversine_km(p1, p2):
     R = 6371.0
     lat1, lng1 = map(math.radians, p1)
@@ -867,24 +893,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # CSV/XLSX above are unaffected -- they're still this module's own try_place-based pack,
     # generated independently, so a truck grouping shown in the interactive HTML may not be
     # byte-identical to the CSV row grouping even though both are individually valid.
-    raw_lines = []
-    for r in rows:
-        qty = _safe_float(r["qty_box"])
-        w = _safe_float(r["width_mm"]); l = _safe_float(r["length_mm"]); t = _safe_float(r["thickness_mm"])
-        if not w or w <= 0 or not l or l <= 0 or not t or t <= 0 or not qty or qty <= 0:
-            continue
-        order_date_iso = _to_iso_date(r["order_date"])
-        delivery_date_iso = _to_iso_date(r.get("delivery_date")) if (r.get("delivery_date") or "").strip() else None
-        lat = (r.get("ship_lat") or "").strip()
-        lng = (r.get("ship_lng") or "").strip()
-        raw_lines.append({
-            "o": r["order_no"], "od": order_date_iso, "dd": delivery_date_iso,
-            "cc": r["ship_cust_code"].strip(), "cn": r["ship_cust_name"].strip(),
-            "lat": float(lat) if lat else None, "lng": float(lng) if lng else None,
-            "rt": (r.get("route") or "").strip() or None, "mr": (r.get("main_road") or "").strip() or None,
-            "ic": r["item_code"], "q": qty, "w": w, "l": l, "t": t,
-            "fl": "", "uc": None,
-        })
+    raw_lines = rows_to_raw_lines(rows)
 
     raw_lines_by_plant = {plant_code: {"label": PLANT_NAMES.get(plant_code, plant_code), "lines": raw_lines}}
     order_dates = sorted({rl["od"] for rl in raw_lines if rl["od"]})

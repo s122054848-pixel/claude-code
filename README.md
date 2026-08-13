@@ -7,15 +7,23 @@
 
 ## 使用方式
 
-### 方式一:雙擊 `RunReport.hta`(不需要打指令,一般人用這個)
+### 方式一:雙擊 `RunLive.bat`(建議,體驗跟展示版 artifact 一致)
+
+雙擊 `RunLive.bat`,會開一個本機小型網頁伺服器(只有自己這台電腦能連,不對外開放),自動跳出瀏覽器開啟一個頁面——外觀、操作方式都跟 claude.ai 上的展示版「排車單 & 3D裝載模擬」一樣:選廠區、選訂單日期範圍、按「查詢ERP」,結果直接在同一頁顯示(3D裝載、地圖、排車單明細、模擬裝車全部都在),不會像 `RunReport.hta` 那樣先跳出一個表單視窗、跑完才另外開報表。
+
+⚠️ `RunLive.bat` 這個視窗（黑底文字）要保持開著,它是伺服器的日誌/狀態視窗;關掉它(或按 Ctrl+C)就會停止伺服器,網頁也會跟著連不上。跟 `.hta` 不同,這個方式不會用到 `mshta.exe`,不受 IT 政策封鎖 `mshta.exe` 的影響。
+
+「查詢ERP」查的是資料庫**當下**的資料,每次改日期範圍或廠區都會重新查一次(不像 `RunReport.hta`/`run.ps1` 產生的是某個時間點的靜態快照)。CSV/Excel 正式排車單仍然要用方式二、三產生。
+
+### 方式二:雙擊 `RunReport.hta`(不需要打指令)
 
 雙擊 `RunReport.hta`,會開一個小視窗:填「訂單日期起」(預設今天)、「訂單日期迄」留空只查單一天、要查一段區間才填、車台尺寸留空就好(會讀 `config.json`),按「產生報表」。跑完會自動跳出瀏覽器開啟報表,視窗裡的黑色log框會即時顯示查詢/排車的過程與結果,失敗時錯誤訊息也會顯示在裡面。
 
 產生成功後,再按「打包下載」會把 `orders_<日期標籤>.csv`、`dispatch_sheet_<日期標籤>.csv`、`dispatch_<日期標籤>.html` 三個檔案打包成 `output\dispatch_package_<日期標籤>.zip`,並自動開啟資料夾,方便一次拿走或傳給別人(例如傳到通訊軟體、外部硬碟)。
 
-⚠️ `.hta` 是 Windows 內建的「HTML Application」,能直接執行本機命令(這樣才能不開終端機就查ERP、跑Python)。如果貴公司IT有政策封鎖 `mshta.exe`(一種資安常見的鎖法),雙擊可能沒反應或被防毒攔截——這種情況請改用方式二。
+⚠️ `.hta` 是 Windows 內建的「HTML Application」,能直接執行本機命令(這樣才能不開終端機就查ERP、跑Python)。如果貴公司IT有政策封鎖 `mshta.exe`(一種資安常見的鎖法),雙擊可能沒反應或被防毒攔截——這種情況請改用方式一或方式三。
 
-### 方式二:PowerShell 指令(進階/排程用)
+### 方式三:PowerShell 指令(進階/排程用)
 
 ```powershell
 cd C:\Bernard\IT\Claude\dispatch-planner
@@ -52,7 +60,7 @@ cd C:\Bernard\IT\Claude\dispatch-planner
    .\setup\Setup-InformixConnection.ps1
    ```
    這支腳本會讀 `config.json` 裡剛填的位址,把ERP主機代號寫進機器的 Informix 設定,並建立對應的ODBC DSN。DSN本身**不會**存帳號密碼,密碼只放在你自己的 `config.json`,腳本永遠不會碰到你的密碼。重複執行是安全的。
-7. **測試**:`.\run.ps1 -StartDate <隨便一個最近的日期> -Open`,或直接雙擊 `RunReport.hta`。跑成功、瀏覽器跳出報表,就代表這台電腦裝好了。
+7. **測試**:雙擊 `RunLive.bat`(或 `RunReport.hta`,或 `.\run.ps1 -StartDate <隨便一個最近的日期> -Open`)。跑成功、瀏覽器跳出報表,就代表這台電腦裝好了。
 
 ## 打包工具給別人(維護者用)
 
@@ -72,20 +80,22 @@ cd C:\Bernard\IT\Claude\dispatch-planner
 
 ```
 dispatch-planner/
-  RunReport.hta             雙擊執行的小視窗(一般人用這個,內部會呼叫 run.ps1)
-  run.ps1                   命令列主要進入點
-  Install.ps1               新電腦一鍵安裝精靈,見上方「給新用戶安裝」快速安裝
-  Package.ps1               打包成zip交給新用戶用,見上方「打包工具給別人」
-  config.json               連線資訊 + 預設車台尺寸(實際使用,含密碼)
-  config.example.json       範本(密碼是佔位字串,不含真實密碼)
-  requirements.txt          Python套件清單(pip install -r requirements.txt)
+  RunLive.bat                雙擊執行的即時單頁版入口(建議,見方式一;內部啟動 lib/server.py)
+  RunReport.hta              雙擊執行的小視窗(見方式二,內部會呼叫 run.ps1)
+  run.ps1                    命令列主要進入點(見方式三)
+  Install.ps1                新電腦一鍵安裝精靈,見上方「給新用戶安裝」快速安裝
+  Package.ps1                打包成zip交給新用戶用,見上方「打包工具給別人」
+  config.json                連線資訊 + 預設車台尺寸(實際使用,含密碼)
+  config.example.json        範本(密碼是佔位字串,不含真實密碼)
+  requirements.txt           Python套件清單(pip install -r requirements.txt)
   setup/
     Setup-InformixConnection.ps1   新電腦第一次設定DSN用,見上方「給新用戶安裝」
   lib/
-    extract_orders.ps1       查ERP、輸出 orders_<date>.csv(32-bit PowerShell執行)
-    build_dispatch.py        排車演算法 + 產生排車單CSV + 產生HTML報表
-    template.html            HTML報表的版面/樣式/JS(build_dispatch.py會把資料塞進這份樣板)
-  output/                    每次執行的輸出檔案都會落在這裡
+    server.py                 RunLive.bat 啟動的本機伺服器,即時回應瀏覽器的 /api/orders 查詢
+    extract_orders.ps1        查ERP、輸出 orders_<date>.csv(32-bit PowerShell執行)
+    build_dispatch.py         排車演算法 + 產生排車單CSV + 產生HTML報表
+    template.html             報表的版面/樣式/JS(靜態匯出與即時版共用同一份)
+  output/                     每次執行的輸出檔案都會落在這裡
 ```
 
 ## ERP 資料表關聯(這套 T10 Informix 資料庫的欄位對照,經多次來回確認過)

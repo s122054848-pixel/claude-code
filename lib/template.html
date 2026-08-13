@@ -400,8 +400,10 @@
           <input type="date" id="deliveryFilter">
           <button type="button" id="deliveryClear" title="清除交期篩選,顯示區間內所有交期">清除</button>
         </label>
-        <button type="button" id="rangeReset">重設為預設(訂單日期:一個月前–一星期後 · 交期:明天)</button>
+        <button type="button" id="rangeReset">重設為預設值</button>
+        <button type="button" id="liveQueryBtn" style="display:none;">查詢ERP</button>
         <span class="range-note" id="rangeNote"></span>
+        <span class="range-note" id="liveStatus"></span>
       </div>
       <div class="date-range">
         <div class="mode-toggle" id="viewModeToggle" role="radiogroup" aria-label="檢視模式">
@@ -3020,8 +3022,9 @@ document.getElementById('truckLInput').value = REPORT_DEFAULTS.truckL;
 document.getElementById('truckWInput').value = REPORT_DEFAULTS.truckW;
 document.getElementById('truckHInput').value = REPORT_DEFAULTS.truckH;
 setLoadMode(REPORT_DEFAULTS.loadMode);
-document.getElementById('rangeStart').addEventListener('change', recompute);
-document.getElementById('rangeEnd').addEventListener('change', recompute);
+function rangeChanged() { if (REPORT_DEFAULTS.liveApi) { fetchLive(); } else { recompute(); } }
+document.getElementById('rangeStart').addEventListener('change', rangeChanged);
+document.getElementById('rangeEnd').addEventListener('change', rangeChanged);
 document.getElementById('deliveryFilter').addEventListener('change', recompute);
 document.getElementById('exportExcelBtn').addEventListener('click', exportDispatchExcel);
 document.getElementById('downloadToolBtn').addEventListener('click', downloadStandaloneTool);
@@ -3065,7 +3068,7 @@ document.getElementById('rangeReset').addEventListener('click', () => {
   DIRECTION_EXEMPT_RADIUS_KM = 15;
   document.getElementById('dirExemptKmVal').textContent = '15km';
   setLoadMode('pallet');
-  recompute();
+  if (REPORT_DEFAULTS.liveApi) { fetchLive(); } else { recompute(); }
 });
 document.getElementById('overhangW').addEventListener('input', (e) => {
   PALLET_OVERHANG_W = Number(e.target.value);
@@ -3125,14 +3128,53 @@ document.querySelectorAll('#viewModeToggle button').forEach(btn => {
 });
 
 const plantSelect = document.getElementById('plantSelect');
-plantSelect.innerHTML = PLANT_ORDER.filter(code => RAW_LINES_BY_PLANT[code]).map(code =>
-  `<option value="${code}">${RAW_LINES_BY_PLANT[code].label}</option>`
+// Static exports only ever embed the one plant they were generated for, so filtering the
+// dropdown to RAW_LINES_BY_PLANT used to be harmless. Live mode starts with NO plant's data
+// loaded yet (nothing to query until the user picks one), so the dropdown has to list every
+// known plant from PLANT_INFO regardless of what's been fetched so far.
+plantSelect.innerHTML = PLANT_ORDER.map(code =>
+  `<option value="${code}">${(RAW_LINES_BY_PLANT[code] && RAW_LINES_BY_PLANT[code].label) || PLANT_INFO[code].name}</option>`
 ).join('');
 plantSelect.value = CURRENT_PLANT;
 plantSelect.addEventListener('change', (e) => {
   CURRENT_PLANT = e.target.value;
-  recompute();
+  if (REPORT_DEFAULTS.liveApi) { fetchLive(); } else { recompute(); }
 });
+
+// ---- live-server mode (lib/server.py) ----
+// REPORT_DEFAULTS.liveApi is only ever set by the local server, never by build_dispatch.py's
+// static export -- a static report already has its data embedded and must never touch the
+// network. In live mode there's nothing embedded at all: the very first render has to fetch,
+// and re-picking a date range has to re-fetch (the window already in memory may not cover the
+// newly picked range) rather than just re-filter what's already loaded like rangeStart/rangeEnd's
+// plain `recompute` listeners do for static reports.
+async function fetchLive() {
+  const start = document.getElementById('rangeStart').value;
+  const end = document.getElementById('rangeEnd').value;
+  const liveStatus = document.getElementById('liveStatus');
+  const liveBtn = document.getElementById('liveQueryBtn');
+  if (!start || !end) { liveStatus.textContent = '請先選訂單日期範圍'; return; }
+  liveStatus.textContent = '查詢ERP中...';
+  liveBtn.disabled = true;
+  try {
+    const url = `/api/orders?plant=${encodeURIComponent(CURRENT_PLANT)}&start=${start}&end=${end}`;
+    const res = await fetch(url);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    RAW_LINES_BY_PLANT[CURRENT_PLANT] = body;
+    liveStatus.textContent = `已查詢 ${body.lines.length} 筆明細（${body.label}）`;
+    recompute();
+  } catch (err) {
+    liveStatus.textContent = '查詢失敗：' + err.message;
+  } finally {
+    liveBtn.disabled = false;
+  }
+}
+if (REPORT_DEFAULTS.liveApi) {
+  document.getElementById('liveQueryBtn').style.display = '';
+  document.getElementById('liveQueryBtn').addEventListener('click', fetchLive);
+  fetchLive();
+}
 
 // ---- map pan/zoom interaction ----
 (() => {
