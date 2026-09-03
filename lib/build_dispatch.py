@@ -265,6 +265,48 @@ def rows_to_raw_lines(rows):
     return raw_lines
 
 
+# 1材 = 1000mm x 1000mm x 7mm reference volume -- matches the client-side engine's caiPerBox()
+# in template.html exactly (same constant, same formula), so a route-stats total computed here
+# lines up with what the interactive report/its Excel export would show for the same order lines.
+CAI_REF_HEIGHT_MM = 7.0
+
+
+def cai_per_box(w, l, t):
+    return (w / 1000) * (l / 1000) * (t / CAI_REF_HEIGHT_MM)
+
+
+def compute_route_stats(raw_lines):
+    """Route (occ735) x delivery-date x customer 材數 statistics over ALL confirmed order lines
+    in this extraction batch -- deliberately independent of how the truck-packing algorithm below
+    ends up grouping trucks. Returns (header, rows) shaped for write_dispatch_xlsx: one subtotal
+    row per (route, delivery date) bucket, one row per customer under it, and a grand-total row
+    at the end -- mirrors the interactive report's own 路線統計 tab/Excel sheet exactly."""
+    buckets = {}  # (dd, rt) -> {cc: {"cn": ..., "boxes": ..., "cai": ...}}
+    for rl in raw_lines:
+        dd = rl["dd"] or "(無送貨日)"
+        rt = rl["rt"] or "(無路線代碼)"
+        cust = buckets.setdefault((dd, rt), {}).setdefault(rl["cc"], {"cn": rl["cn"], "boxes": 0, "cai": 0.0})
+        cust["boxes"] += rl["q"]
+        cust["cai"] += cai_per_box(rl["w"], rl["l"], rl["t"]) * rl["q"]
+
+    header = ["路線", "送貨交期", "客戶代號", "客戶名稱", "箱數", "材數"]
+    rows = []
+    grand_boxes = 0
+    grand_cai = 0.0
+    for (dd, rt) in sorted(buckets.keys()):
+        custs = buckets[(dd, rt)]
+        sub_boxes = sum(c["boxes"] for c in custs.values())
+        sub_cai = sum(c["cai"] for c in custs.values())
+        rows.append([rt, dd, "— 小計 —", "", int(sub_boxes), round(sub_cai, 2)])
+        for cc in sorted(custs.keys()):
+            c = custs[cc]
+            rows.append(["", "", cc, c["cn"], int(c["boxes"]), round(c["cai"], 2)])
+        grand_boxes += sub_boxes
+        grand_cai += sub_cai
+    rows.append(["總計", "", "", "", int(grand_boxes), round(grand_cai, 2)])
+    return header, rows
+
+
 def haversine_km(p1, p2):
     R = 6371.0
     lat1, lng1 = map(math.radians, p1)
@@ -345,17 +387,7 @@ def two_opt_improve(codes, road_km_fn):
     return best
 
 
-def write_dispatch_xlsx(out_xlsx, header, rows):
-    """Formatted .xlsx twin of the dispatch-sheet CSV -- same columns/rows, but with a real
-    number type on the numeric columns (so Excel won't mangle order numbers as dates/scientific
-    notation the way it sometimes does with plain CSV), bold header, borders, autosized columns,
-    a frozen header row and an autofilter so it's usable straight out of the download."""
-    numeric_cols = {7, 8, 9, 10, 11}  # 1-indexed: 箱數, 寬mm, 長mm, 厚mm, 堆疊數
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "排車明細"
-
+def _fill_sheet(ws, header, rows, numeric_cols):
     header_fill = PatternFill("solid", fgColor="1F2937")
     header_font = Font(bold=True, color="FFFFFF")
     thin = Side(style="thin", color="D0D0D0")
@@ -386,6 +418,27 @@ def write_dispatch_xlsx(out_xlsx, header, rows):
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{len(rows) + 1}"
+
+
+def write_dispatch_xlsx(out_xlsx, header, rows, extra_sheets=None):
+    """Formatted .xlsx twin of the dispatch-sheet CSV -- same columns/rows, but with a real
+    number type on the numeric columns (so Excel won't mangle order numbers as dates/scientific
+    notation the way it sometimes does with plain CSV), bold header, borders, autosized columns,
+    a frozen header row and an autofilter so it's usable straight out of the download.
+
+    extra_sheets, if given, is a list of (title, header, rows, numeric_cols) tuples appended as
+    additional worksheets after the main one -- e.g. the 路線統計 tab, which has nothing to do
+    with 排車明細's columns/rows and so can't share this function's numeric_cols default."""
+    numeric_cols = {7, 8, 9, 10, 11}  # 1-indexed: 箱數, 寬mm, 長mm, 厚mm, 堆疊數
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "排車明細"
+    _fill_sheet(ws, header, rows, numeric_cols)
+
+    for title, ex_header, ex_rows, ex_numeric_cols in (extra_sheets or []):
+        ws2 = wb.create_sheet(title)
+        _fill_sheet(ws2, ex_header, ex_rows, ex_numeric_cols)
 
     os.makedirs(os.path.dirname(out_xlsx) or ".", exist_ok=True)
     wb.save(out_xlsx)
@@ -880,8 +933,17 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
         wr.writerows(sheet_rows)
     print("Dispatch sheet written:", out_csv)
 
+    # 路線統計 (route x delivery-date x customer 材數): computed over ALL confirmed order lines
+    # in this batch, independent of truck_out -- needs raw_lines, so compute that now instead of
+    # where it used to live further down (still reused for the HTML embed below unchanged).
+    raw_lines = rows_to_raw_lines(rows)
+    route_header, route_rows = compute_route_stats(raw_lines)
+
     if out_xlsx:
-        write_dispatch_xlsx(out_xlsx, sheet_header, sheet_rows)
+        write_dispatch_xlsx(
+            out_xlsx, sheet_header, sheet_rows,
+            extra_sheets=[("路線統計", route_header, route_rows, {5, 6})],
+        )
         print("Dispatch sheet (Excel) written:", out_xlsx)
 
     # --- HTML report: raw order lines + the SAME client-side packing engine the demo Artifact
@@ -893,8 +955,7 @@ def build(csv_path, date_label, truck_l, truck_w, truck_h, out_html, out_csv, te
     # CSV/XLSX above are unaffected -- they're still this module's own try_place-based pack,
     # generated independently, so a truck grouping shown in the interactive HTML may not be
     # byte-identical to the CSV row grouping even though both are individually valid.
-    raw_lines = rows_to_raw_lines(rows)
-
+    # (raw_lines was already computed above, for compute_route_stats().)
     raw_lines_by_plant = {plant_code: {"label": PLANT_NAMES.get(plant_code, plant_code), "lines": raw_lines}}
     order_dates = sorted({rl["od"] for rl in raw_lines if rl["od"]})
     report_defaults = {

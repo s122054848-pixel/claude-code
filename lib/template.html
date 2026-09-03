@@ -313,6 +313,16 @@
   }
   .table-scroll { overflow-x: auto; }
 
+  .route-stats {
+    padding: 20px 26px 30px;
+    overflow-y: auto;
+    max-height: calc(100vh - 88px);
+  }
+  table.dispatch tr.route-group-head td {
+    background: var(--surface-2); font-weight: 700;
+    border-top: 1px solid var(--line);
+  }
+
   .tooltip {
     position: fixed; pointer-events: none; z-index: 20;
     background: var(--ink); color: var(--bg);
@@ -409,6 +419,7 @@
         <div class="mode-toggle" id="viewModeToggle" role="radiogroup" aria-label="檢視模式">
           <button type="button" data-mode="auto" class="active">自動排車</button>
           <button type="button" data-mode="sim">模擬裝車</button>
+          <button type="button" data-mode="route">路線統計</button>
         </div>
         <div class="mode-toggle" id="loadModeToggle" role="radiogroup" aria-label="裝車方式">
           <button type="button" data-mode="pallet" class="active">棧板疊車</button>
@@ -498,6 +509,30 @@
         </table>
       </div>
     </main>
+  </div>
+
+  <div class="route-stats" id="routeStatsPanel" style="display:none;">
+    <div class="panel-head">
+      <div>
+        <h2>路線 × 交期 客戶材數統計</h2>
+        <div class="sub" style="color:var(--muted);font-size:12.5px;margin-top:2px;">
+          統計目前篩選範圍內的所有已確認訂單(排車前),依「送貨交期」→「路線」分組、逐客戶列出材數 —— 跟自動排車實際怎麼分車無關,純粹是這批訂單本身的量。
+        </div>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table class="dispatch" id="routeStatsTable">
+        <caption>路線同交期客戶材數統計表</caption>
+        <thead>
+          <tr>
+            <th>路線</th><th>送貨交期</th><th>客戶代號</th><th>客戶名稱</th>
+            <th class="num">箱數</th><th class="num">材數</th>
+          </tr>
+        </thead>
+        <tbody id="routeStatsBody"></tbody>
+        <tfoot id="routeStatsFoot"></tfoot>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -2131,7 +2166,7 @@ const state = { current: 0 };
 // automatic planner choose) and sees whether they'd load into ONE truck of the current
 // dimensions/load-mode. SIM_SELECTED holds "custCode||orderNo" keys; SIM_RESULT is the last
 // simulateSingleTruck() output (or null before the first run / after the selection changes).
-let VIEW_MODE = 'auto'; // 'auto' | 'sim'
+let VIEW_MODE = 'auto'; // 'auto' | 'sim' | 'route'
 let SIM_SELECTED = new Set();
 let SIM_RESULT = null;
 let SIM_FILTER_TEXT = ''; // 模擬裝車 picker's delivery-location search box (customer code or name)
@@ -2161,6 +2196,16 @@ function recompute() {
   }
   let filtered = currentLines().filter(r => r.od >= startISO && r.od <= endISO);
   if (deliveryISO) filtered = filtered.filter(r => r.dd === deliveryISO);
+  if (VIEW_MODE === 'route') {
+    // 路線統計 works directly off the filtered raw lines -- no need to run the truck-packing
+    // algorithm (computePlan) just to throw its result away.
+    if (!filtered.length) {
+      const deliveryPart = deliveryISO ? `、交期=${deliveryISO}` : '';
+      note.textContent = `所選訂單日期區間(${startISO} ~ ${endISO}${deliveryPart})內沒有已確認訂單資料`;
+    }
+    render();
+    return;
+  }
   DATA = computePlan(filtered);
   if (!DATA.trucks.length) {
     const deliveryPart = deliveryISO ? `、交期=${deliveryISO}` : '';
@@ -2424,7 +2469,95 @@ function runSimulation() {
 
 function render() {
   if (VIEW_MODE === 'sim') { renderSimView(); return; }
+  if (VIEW_MODE === 'route') { renderRouteStats(); return; }
   renderAutoView();
+}
+
+// ---- 路線統計 mode: 路線 x 交期 客戶材數統計表 ----
+// Deliberately independent of DATA/computePlan -- this is "how much volume does this batch of
+// CONFIRMED orders represent, broken down by route and delivery date", not "how did the packing
+// algorithm end up grouping trucks". Same underlying order lines and date/delivery filters as
+// the automatic/simulated views, just aggregated a completely different way.
+function computeRouteStats() {
+  const startISO = document.getElementById('rangeStart').value;
+  const endISO = document.getElementById('rangeEnd').value;
+  const deliveryISO = document.getElementById('deliveryFilter').value;
+  let filtered = currentLines().filter(r => r.od >= startISO && r.od <= endISO);
+  if (deliveryISO) filtered = filtered.filter(r => r.dd === deliveryISO);
+
+  const custMap = new Map(); // "dd|||rt|||cc" -> { dd, rt, cc, cn, boxes, cai }
+  for (const r of filtered) {
+    const dd = r.dd || '(無送貨日)';
+    const rt = r.rt || '(無路線代碼)';
+    const key = dd + '|||' + rt + '|||' + r.cc;
+    let g = custMap.get(key);
+    if (!g) { g = { dd, rt, cc: r.cc, cn: r.cn, boxes: 0, cai: 0 }; custMap.set(key, g); }
+    g.boxes += r.q;
+    g.cai += caiPerBox(r.w, r.l, r.t) * r.q;
+  }
+
+  const bucketMap = new Map(); // "dd|||rt" -> { dd, rt, rows: [...], subtotalBoxes, subtotalCai }
+  for (const g of custMap.values()) {
+    const bKey = g.dd + '|||' + g.rt;
+    let b = bucketMap.get(bKey);
+    if (!b) { b = { dd: g.dd, rt: g.rt, rows: [], subtotalBoxes: 0, subtotalCai: 0 }; bucketMap.set(bKey, b); }
+    b.rows.push(g);
+    b.subtotalBoxes += g.boxes;
+    b.subtotalCai += g.cai;
+  }
+
+  const buckets = Array.from(bucketMap.values());
+  buckets.forEach(b => b.rows.sort((x, y) => x.cc < y.cc ? -1 : x.cc > y.cc ? 1 : 0));
+  // chronological first (which day needs planning), then route within a day
+  buckets.sort((a, b) => (a.dd !== b.dd) ? (a.dd < b.dd ? -1 : 1) : (a.rt < b.rt ? -1 : a.rt > b.rt ? 1 : 0));
+
+  const grandBoxes = buckets.reduce((s, b) => s + b.subtotalBoxes, 0);
+  const grandCai = buckets.reduce((s, b) => s + b.subtotalCai, 0);
+  const totalOrders = new Set(filtered.map(r => r.o)).size;
+  const totalCustomers = new Set(filtered.map(r => r.cc)).size;
+  return { buckets, grandBoxes, grandCai, totalOrders, totalCustomers };
+}
+
+function renderRouteStats() {
+  const { buckets, grandBoxes, grandCai, totalOrders, totalCustomers } = computeRouteStats();
+  // this mode never runs computePlan, so DATA.meta's truck-packing stats (需求車次/總配送距離)
+  // don't exist here -- show only the counts that are actually meaningful pre-packing.
+  document.getElementById('statRow').innerHTML = [
+    ['訂單數', fmtInt(totalOrders)],
+    ['送貨客戶數', fmtInt(totalCustomers)],
+    ['總箱數', fmtInt(grandBoxes)],
+    ['總材數', grandCai.toLocaleString('en-US', {maximumFractionDigits:0})],
+  ].map(([lbl, num]) => `<div class="stat"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`).join('');
+  document.getElementById('metaPlant').textContent = currentPlantLabel();
+  document.getElementById('metaDate').textContent = REPORT_DEFAULTS.dateLabel;
+
+  const tbody = document.getElementById('routeStatsBody');
+  const tfoot = document.getElementById('routeStatsFoot');
+  if (!buckets.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;">所選範圍內沒有已確認訂單資料</td></tr>`;
+    tfoot.innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = buckets.map(b => `
+    <tr class="route-group-head">
+      <td>${b.rt}</td><td>${b.dd}</td><td colspan="2">— 小計 —</td>
+      <td class="num">${fmtInt(b.subtotalBoxes)}</td>
+      <td class="num">${b.subtotalCai.toLocaleString('en-US', {maximumFractionDigits:2})}</td>
+    </tr>
+  ` + b.rows.map(r => `
+    <tr>
+      <td></td><td></td><td>${r.cc}</td><td>${r.cn}</td>
+      <td class="num">${fmtInt(r.boxes)}</td>
+      <td class="num">${r.cai.toLocaleString('en-US', {maximumFractionDigits:2})}</td>
+    </tr>
+  `).join('')).join('');
+  tfoot.innerHTML = `
+    <tr>
+      <td colspan="4">總計</td>
+      <td class="num">${fmtInt(grandBoxes)}</td>
+      <td class="num">${grandCai.toLocaleString('en-US', {maximumFractionDigits:2})}</td>
+    </tr>
+  `;
 }
 
 function clearViewport() {
@@ -2690,27 +2823,59 @@ function renderLegend(t) {
 // libraries and no network access -- Excel opens this directly with correct cell typing
 // (numbers stay numeric) and no warnings as long as the extension is .xls, not .xlsx.
 function exportDispatchExcel() {
-  if (!DATA || !DATA.trucks.length) return;
-  const header = ['車次', '疊車順序', '送貨客戶', '訂單號', '品號', '楞別', '單位', '箱數', '箱寬mm', '箱長mm', '厚mm', '單位尺寸mm', '堆數', '堆疊高度mm', '單位總高mm', '材數/箱', '材數合計'];
-  const rows = [];
-  DATA.trucks.forEach(t => {
-    t.rows.forEach(r => {
-      rows.push([
-        `車次${t.n}`, r.seq, `${r.cust_code} ${r.cust_name}`, r.order_no, r.item, r.flute || '—', r.unit,
-        r.boxes, r.w, r.l, r.t, `${r.palletW}×${r.palletL}`, r.pallets, r.stackH, r.palletTotalH,
-        r.caiPerBox, Math.round(r.caiTotal * 100) / 100,
-      ]);
-    });
-  });
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const headHtml = '<tr>' + header.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>';
-  const bodyHtml = rows.map(r => '<tr>' + r.map(v => `<td>${esc(v)}</td>`).join('') + '</tr>').join('');
+  const sheets = []; // [{name, headHtml, bodyHtml}], in the order they'll appear as workbook tabs
+
+  if (DATA && DATA.trucks.length) {
+    const header = ['車次', '疊車順序', '送貨客戶', '訂單號', '品號', '楞別', '單位', '箱數', '箱寬mm', '箱長mm', '厚mm', '單位尺寸mm', '堆數', '堆疊高度mm', '單位總高mm', '材數/箱', '材數合計'];
+    const rows = [];
+    DATA.trucks.forEach(t => {
+      t.rows.forEach(r => {
+        rows.push([
+          `車次${t.n}`, r.seq, `${r.cust_code} ${r.cust_name}`, r.order_no, r.item, r.flute || '—', r.unit,
+          r.boxes, r.w, r.l, r.t, `${r.palletW}×${r.palletL}`, r.pallets, r.stackH, r.palletTotalH,
+          r.caiPerBox, Math.round(r.caiTotal * 100) / 100,
+        ]);
+      });
+    });
+    sheets.push({
+      name: '排車明細',
+      headHtml: '<tr>' + header.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>',
+      bodyHtml: rows.map(r => '<tr>' + r.map(v => `<td>${esc(v)}</td>`).join('') + '</tr>').join(''),
+    });
+  }
+
+  // 路線統計 doesn't depend on DATA/computePlan (see computeRouteStats), so it's always
+  // available to export regardless of which view mode the user happens to be in right now.
+  const { buckets, grandBoxes, grandCai } = computeRouteStats();
+  if (buckets.length) {
+    const rsHeader = ['路線', '送貨交期', '客戶代號', '客戶名稱', '箱數', '材數'];
+    const rsRows = [];
+    buckets.forEach(b => {
+      rsRows.push([b.rt, b.dd, '— 小計 —', '', b.subtotalBoxes, Math.round(b.subtotalCai * 100) / 100]);
+      b.rows.forEach(r => rsRows.push(['', '', r.cc, r.cn, r.boxes, Math.round(r.cai * 100) / 100]));
+    });
+    rsRows.push(['總計', '', '', '', grandBoxes, Math.round(grandCai * 100) / 100]);
+    sheets.push({
+      name: '路線統計',
+      headHtml: '<tr>' + rsHeader.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>',
+      bodyHtml: rsRows.map(r => '<tr>' + r.map(v => `<td>${esc(v)}</td>`).join('') + '</tr>').join(''),
+    });
+  }
+
+  if (!sheets.length) return;
+
+  // Excel's "HTML as .xls" trick: one <x:ExcelWorksheet>/<table> pair per sheet, matched by
+  // order (not by name) -- this is the same trick the single-sheet version already relied on,
+  // just repeated once per sheet instead of assuming there's exactly one.
+  const worksheetDecls = sheets.map(s =>
+    `<x:ExcelWorksheet><x:Name>${esc(s.name)}</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>`
+  ).join('');
+  const tables = sheets.map(s => `<table border="1">${s.headHtml}${s.bodyHtml}</table>`).join('');
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
 <head><meta charset="UTF-8">
-<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
-<x:Name>排車明細</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
-<body><table border="1">${headHtml}${bodyHtml}</table></body></html>`;
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets>${worksheetDecls}</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+<body>${tables}</body></html>`;
   const blob = new Blob(['﻿' + html], { type: 'application/vnd.ms-excel' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -3110,12 +3275,18 @@ function setViewMode(mode) {
   VIEW_MODE = mode;
   document.querySelectorAll('#viewModeToggle button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   // 車次最大客戶數 / 方向限制豁免距離 only affect the automatic multi-customer clustering
-  // (packStacksIntoTrucks) -- 模擬裝車 never runs that pass (it packs exactly the customers
-  // the user checked into one truck), so grey those two controls out to avoid implying they'd
-  // do anything here.
+  // (packStacksIntoTrucks) -- 模擬裝車 and 路線統計 never run that pass (模擬裝車 packs exactly
+  // the customers the user checked; 路線統計 doesn't pack trucks at all), so grey those two
+  // controls out to avoid implying they'd do anything here.
   const sim = mode === 'sim';
-  document.getElementById('maxCustPerTruckLabel').classList.toggle('disabled', sim);
-  document.getElementById('dirExemptKmLabel').classList.toggle('disabled', sim);
+  const route = mode === 'route';
+  document.getElementById('maxCustPerTruckLabel').classList.toggle('disabled', sim || route);
+  document.getElementById('dirExemptKmLabel').classList.toggle('disabled', sim || route);
+  // 路線統計 isn't about any single truck's packing, so it replaces the whole truck-list +
+  // 3D/map/dispatch-table viewport rather than sharing it the way 自動排車/模擬裝車 do.
+  document.querySelector('.body-grid').style.display = route ? 'none' : '';
+  document.getElementById('routeStatsPanel').style.display = route ? '' : 'none';
+  if (route) { render(); return; }
   state.current = 0;
   if (sim) buildSimPicker(); else buildTruckList();
   render();
